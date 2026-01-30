@@ -1,0 +1,16 @@
+[package]
+name = "grommet"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "grommet"
+crate-type = ["cdylib"]
+
+[dependencies]
+async-graphql = "7.0"
+indexmap = "2"
+pyo3 = { version = "0.20", features = ["extension-module", "abi3-py38"] }
+pyo3-asyncio = { version = "0.20", features = ["tokio-runtime"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
