@@ -1,10 +1,22 @@
 import dataclasses
 import enum
+import functools
 import inspect
 from builtins import type as pytype
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ParamSpec, TypeVar, overload
 
-from .metadata import MISSING, EnumMeta, FieldMeta, ScalarMeta, TypeMeta, UnionMeta
+from .metadata import (
+    MISSING,
+    EnumMeta,
+    FieldMeta,
+    GrommetMetaType,
+    ScalarMeta,
+    TypeMeta,
+    UnionMeta,
+)
+
+P = ParamSpec("P")
+R = TypeVar("R")
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -20,6 +32,7 @@ class _FieldResolver:
         "default",
         "default_factory",
         "init",
+        "bind_to_class",
     )
 
     def __init__(
@@ -32,6 +45,7 @@ class _FieldResolver:
         default: "Any",
         default_factory: "Callable[[], Any] | Any",
         init: bool | None,
+        bind_to_class: bool,
     ) -> None:
         self.resolver = resolver
         self.description = description
@@ -40,6 +54,7 @@ class _FieldResolver:
         self.default = default
         self.default_factory = default_factory
         self.init = init
+        self.bind_to_class = bind_to_class
 
 
 def _field_from_resolver(
@@ -75,6 +90,10 @@ def _field_from_resolver(
     return field_def
 
 
+def _set_grommet_attr(target: pytype, name: str, value: "Any") -> None:
+    setattr(target, name, value)
+
+
 def _apply_field_resolvers(target: pytype) -> tuple[pytype, bool]:
     pending = {
         attr_name: value
@@ -100,8 +119,12 @@ def _apply_field_resolvers(target: pytype) -> tuple[pytype, bool]:
                 )
             annotations[field_name] = return_annotation
 
+        resolver = marker.resolver
+        if marker.bind_to_class:
+            # bind class for classmethod-style resolvers
+            resolver = functools.partial(resolver, target)
         field_def = _field_from_resolver(
-            marker.resolver,
+            resolver,
             description=marker.description,
             deprecation_reason=marker.deprecation_reason,
             name=marker.name,
@@ -147,7 +170,7 @@ def type(
             description=description,
             implements=tuple(implements or ()),
         )
-        setattr(target, "__grommet__", meta)
+        _set_grommet_attr(target, "__grommet_meta__", meta)
         return target
 
     if cls is None:
@@ -169,7 +192,7 @@ def input(
         meta = TypeMeta(
             kind="input", name=name or target.__name__, description=description
         )
-        setattr(target, "__grommet__", meta)
+        _set_grommet_attr(target, "__grommet_meta__", meta)
         return target
 
     if cls is None:
@@ -209,12 +232,38 @@ def interface(
             description=description,
             implements=tuple(implements or ()),
         )
-        setattr(target, "__grommet__", meta)
+        _set_grommet_attr(target, "__grommet_meta__", meta)
         return target
 
     if cls is None:
         return wrap
     return wrap(cls)
+
+
+@overload
+def field(
+    func: "Callable[P, R]",
+    *,
+    description: str | None = None,
+    deprecation_reason: str | None = None,
+    name: str | None = None,
+    default: "Any" = MISSING,
+    default_factory: "Callable[[], Any] | Any" = MISSING,
+    init: bool | None = None,
+) -> "_FieldResolver": ...
+
+
+@overload
+def field(
+    func: None = None,
+    *,
+    description: str | None = None,
+    deprecation_reason: str | None = None,
+    name: str | None = None,
+    default: "Any" = MISSING,
+    default_factory: "Callable[[], Any] | Any" = MISSING,
+    init: bool | None = None,
+) -> "Callable[[Callable[P, R]], _FieldResolver]": ...
 
 
 def field(
@@ -229,7 +278,11 @@ def field(
 ) -> "_FieldResolver | Callable[[Callable[..., Any]], _FieldResolver]":
     def wrap(target: "Callable[..., Any]") -> _FieldResolver:
         func = target
-        if isinstance(func, staticmethod | classmethod):
+        bind_to_class = False
+        if isinstance(func, classmethod):
+            bind_to_class = True
+            func = func.__func__
+        elif isinstance(func, staticmethod):
             func = func.__func__
         if not callable(func):
             raise TypeError("Decorator usage expects a callable resolver.")
@@ -241,6 +294,7 @@ def field(
             default=default,
             default_factory=default_factory,
             init=init,
+            bind_to_class=bind_to_class,
         )
 
     if func is None:
@@ -268,7 +322,7 @@ def scalar(
             description=description,
             specified_by_url=specified_by_url,
         )
-        setattr(target, "__grommet_scalar__", meta)
+        _set_grommet_attr(target, "__grommet_meta__", meta)
         return target
 
     if cls is None:
@@ -286,7 +340,7 @@ def enum_type(
         if not issubclass(target, enum.Enum):
             raise TypeError("@grommet.enum requires an enum.Enum subclass.")
         meta = EnumMeta(name=name or target.__name__, description=description)
-        setattr(target, "__grommet_enum__", meta)
+        _set_grommet_attr(target, "__grommet_meta__", meta)
         return target
 
     if cls is None:
@@ -306,10 +360,10 @@ def union(
     if not type_list:
         raise TypeError("union() requires at least one possible type.")
     for tp in type_list:
-        meta = getattr(tp, "__grommet__", None)
-        if meta is None or meta.kind != "object":
+        meta = getattr(tp, "__grommet_meta__", None)
+        if meta is None or meta.type is not GrommetMetaType.TYPE:
             raise TypeError("union() types must be @grommet.type object types.")
     meta = UnionMeta(name=name, types=type_list, description=description)
     target = pytype(name, (), {})
-    setattr(target, "__grommet_union__", meta)
+    _set_grommet_attr(target, "__grommet_meta__", meta)
     return target

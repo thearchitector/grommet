@@ -3,7 +3,7 @@
 ## 1) Core GraphQL Features
 - **Subscriptions (async iterator support)** (done)
   - [x] Extend Rust core to support subscription execution in async-graphql dynamic schema.
-  - [x] Python resolver returns `AsyncIterator`/`AsyncIterable`; bridge via pyo3-asyncio to stream results.
+  - [x] Python resolver returns `AsyncIterator`/`AsyncIterable`; bridge via pyo3-async-runtimes to stream results.
   - [x] Add Python `Schema.subscribe()` returning an async generator yielding payloads.
   - [x] Tests: cancellation behavior, backpressure.
 
@@ -17,7 +17,7 @@
   - [x] Map to async-graphql dynamic types and resolve type selection.
   - [x] Tests: union/interface resolution, enum input/output.
 
-- **Field argument defaults + input validation** (partial)
+- **Field argument defaults + input validation** (done)
   - [x] Ensure GraphQL arg default values map from Python defaults.
   - [x] Improve error reporting for invalid inputs and missing required fields.
   - [x] Tests: missing required, nested input errors. (Default arg + invalid input covered.)
@@ -28,40 +28,40 @@
   - [x] Provide a lightweight `Info`/`Context` Python struct or mapping.
   - [x] Tests: info/context availability, root passthrough.
 
-- **Dataclass field inference and nullability**
-  - Tighten Optional/nullability handling, list nullability, nested nullability.
-  - Optional fields are strictly nullable. Non-optional fields are non-nullable.
-  - Tests: list vs. list-of-non-null, optional coercion.
+- **Dataclass field inference and nullability** (done)
+  - [x] Tighten Optional/nullability handling, list nullability, nested nullability.
+  - [x] Optional fields are strictly nullable. Non-optional fields are non-nullable.
+  - [x] Tests: list vs. list-of-non-null, optional coercion.
 
-- **Decorator ergonomics**
-  - Support `@gm.field(...)` with arguments on methods (e.g., description).
-  - Confirm `@gm.field` works on `@classmethod` and `@staticmethod`.
-  - Tests: decorator arg usage, classmethod resolver.
+- **Decorator ergonomics** (done)
+  - [x] Support `@gm.field(...)` with arguments on methods (e.g., description).
+  - [x] Confirm `@gm.field` works on `@classmethod` and `@staticmethod`.
+  - [x] Tests: decorator arg usage, classmethod resolver.
 
 ## 3) Execution & Error Handling
-- **Error propagation**
-  - Preserve path, locations, and extensions from async-graphql to Python output.
-  - Convert Python exceptions into GraphQL errors with stack traces behind a flag.
-  - Tests: resolver error includes path and location.
+- **Error propagation** (done)
+  - [x] Preserve path, locations, and extensions from async-graphql to Python output.
+  - [x] Convert Python exceptions into GraphQL errors with stack traces behind a flag.
+  - [x] Tests: resolver error includes path and location.
 
-- **Result shape consistency**
-  - Ensure `data` is `None` on errors per spec.
-  - Normalize response into a stable Python dict schema.
-  - Tests: errors only, partial data, extensions.
+- **Result shape consistency** (done)
+  - [x] Ensure `data` is `None` on errors per spec.
+  - [x] Normalize response into a stable Python dict schema.
+  - [x] Tests: errors only, partial data, extensions.
 
 ## 4) Rust/Python Interop & Performance
-- **Async runtime integration**
-  - Make runtime init explicit and configurable (tokio runtime builder options).
-  - Support running inside existing event loops without deadlocks.
-  - Tests: nested event loop use.
+- **Async runtime integration** (done)
+  - [x] Make runtime init explicit and configurable (tokio runtime builder options).
+  - [x] Support running inside existing event loops without deadlocks.
+  - [x] Tests: nested event loop use.
 
-- **Resolver call overhead**
-  - Cache Python callable lookups per field.
-  - Avoid repeated coercion work when not needed.
-  - Benchmarks: simple query throughput.
+- **Resolver call overhead** (done)
+  - [x] Cache Python callable lookups per field.
+  - [x] Avoid repeated coercion work when not needed.
+  - [x] Benchmarks: simple query throughput.
 
-- **Huge result size handling**
-  - Benchmark: A single field that returns a large list (~100k items) of other types that each have 2 fields.
+- **Huge result size handling** (done)
+  - [x] Benchmark: A single field that returns a large list (~100k items) of other types that each have 2 fields.
 
 ## 5) Test Coverage Expansion
 - **Subscription tests** (done)
@@ -69,22 +69,22 @@
   - [x] Cancellation semantics.
   - [x] Backpressure/sequential consumption.
 
-- **Schema generation snapshots**
-  - Snapshot SDL for a representative schema.
+- **Schema generation snapshots** (done)
+  - [x] Snapshot SDL for a representative schema.
 
-- **Edge cases**
-  - Recursive types, input object defaults, list-of-inputs, nested optionals.
+- **Edge cases** (done)
+  - [x] Recursive types, input object defaults, list-of-inputs, nested optionals.
 
-- **Maximize test coverage**
-  - Use pytest-cov to measure test coverage.
-  - Get to 100% coverage of all features and functionality.
+- **Maximize test coverage** (done)
+  - [x] Use pytest-cov to measure test coverage.
+  - [x] Get to 100% coverage of all features and functionality.
 
 ## 5) Packaging & Developer Experience
-- **Docs + examples**
-  - Add subscription example, custom scalar example, and schema overview.
-  - Provide quickstart + advanced resolver patterns.
+- **Docs + examples** (done)
+  - [x] Add subscription example, custom scalar example, and schema overview.
+  - [x] Provide quickstart + advanced resolver patterns.
 
-- **CI**
-  - Add Linux + macOS matrix with Python 3.13 + maturin.
-  - GitHub Actions.
-  - Run tests, build wheels, lint.
+- **CI** (done)
+  - [x] Add Linux + macOS matrix with Python 3.13 + maturin.
+  - [x] GitHub Actions.
+  - [x] Run tests, build wheels, lint.

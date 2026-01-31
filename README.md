@@ -6,7 +6,12 @@ Dataclass-first GraphQL schema definitions in Python, executed by async-graphql 
 
 ```python
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
 import grommet as gm
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 @gm.type
 @dataclass
@@ -20,6 +25,54 @@ schema = gm.Schema(query=Query)
 
 result = await schema.execute("{ hello(name: \"Ada\") }")
 print(result["data"]["hello"])
+```
+
+## Subscriptions
+
+```python
+@gm.type
+@dataclass
+class Subscription:
+    @gm.field
+    @staticmethod
+    async def countdown(parent, info, limit: int) -> "AsyncIterator[int]":
+        for i in range(limit):
+            yield i
+
+schema = gm.Schema(query=Query, subscription=Subscription)
+stream = schema.subscribe("subscription ($limit: Int!) { countdown(limit: $limit) }", variables={"limit": 3})
+async for payload in stream:
+    print(payload["data"]["countdown"])
+```
+
+## Custom Scalars
+
+```python
+@gm.scalar(
+    name="Date",
+    serialize=lambda value: value.value,
+    parse_value=lambda value: Date(str(value)),
+)
+@dataclass(frozen=True)
+class Date:
+    value: str
+
+@gm.type
+@dataclass
+class Query:
+    @gm.field
+    @staticmethod
+    async def today(parent, info) -> Date:
+        return Date("2026-01-30")
+
+schema = gm.Schema(query=Query, scalars=[Date])
+```
+
+## Schema Overview
+
+```python
+schema = gm.Schema(query=Query)
+print(schema.sdl())
 ```
 
 ## Inputs
@@ -45,6 +98,29 @@ async def get_user(parent, info, user: UserInput) -> User:
 - Field arguments are derived from resolver type annotations.
 - Input types must be marked with `@gm.input`.
 - Use `Schema.sdl()` to inspect the generated schema.
+- Resolver params may include `parent`, `info` (`gm.Info`), `context`, and `root`.
+- Use `Schema(debug=True)` to include Python tracebacks in error extensions.
+- Fields prefixed with `_`, annotated as `ClassVar`, or wrapped in `gm.Internal[...]`/`gm.Private[...]` are excluded from the schema.
+
+## Runtime Configuration
+
+```python
+# Configure the Tokio runtime before creating schemas.
+gm.configure_runtime(use_current_thread=True)
+```
+
+## Benchmarks
+
+```bash
+uv run python scripts/bench_simple.py
+uv run python scripts/bench_large_list.py
+```
+
+## Type stubs (experimental)
+
+PyO3 introspection data is enabled via the `experimental-inspect` feature. Stub generation is still
+in progress and not wired into maturin yet, so `.pyi` files need to be generated out-of-band using
+the `pyo3-introspection` crate against a built extension module.
 
 ## Build
 

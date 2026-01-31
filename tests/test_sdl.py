@@ -9,6 +9,13 @@ if TYPE_CHECKING:
     from typing import Any
 
 
+@gm.type
+@dataclass
+class SdlUser:
+    name: str
+    age: int | None = None
+
+
 @gm.input(name="UserInput")
 @dataclass
 class SdlUserInput:
@@ -33,3 +40,4 @@ async def test_schema_sdl_contains_types() -> None:
     assert "type Query" in sdl
     assert "input UserInput" in sdl
     assert "greet" in sdl
+    assert "SdlUser" not in sdl

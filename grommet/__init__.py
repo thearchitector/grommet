@@ -1,7 +1,8 @@
 from .decorators import enum_type as enum
 from .decorators import field, input, interface, scalar, type, union
 from .info import Info
-from .metadata import ID
+from .metadata import ID, Internal, Private
+from .runtime import configure_runtime
 from .schema import Schema
 
 __all__ = [
@@ -15,4 +16,7 @@ __all__ = [
     "enum",
     "ID",
     "Info",
+    "configure_runtime",
+    "Internal",
+    "Private",
 ]

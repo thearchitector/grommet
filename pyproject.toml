@@ -13,7 +13,10 @@ dev = [
     "pytest-cov",
     "pre-commit",
     "mypy",
-    "ruff>=0.14.14",
+    "ruff",
+]
+perf = [
+    "strawberry-graphql",
 ]
 
 [tool.pytest.ini_options]

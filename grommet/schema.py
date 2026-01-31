@@ -2,7 +2,7 @@ import dataclasses
 import inspect
 from builtins import type as pytype
 from collections.abc import AsyncIterable, AsyncIterator
-from typing import TYPE_CHECKING, List, get_args, get_origin
+from typing import TYPE_CHECKING, ClassVar, List, get_args, get_origin
 
 from . import _core
 from .info import Info
@@ -12,6 +12,9 @@ from .metadata import (
     MISSING,
     EnumMeta,
     FieldMeta,
+    GrommetMetaType,
+    Internal,
+    Private,
     ScalarMeta,
     TypeMeta,
     TypeSpec,
@@ -40,6 +43,7 @@ class Schema:
         subscription: pytype | None = None,
         types: "Iterable[pytype]" = (),
         scalars: "Iterable[pytype]" = (),
+        debug: bool = False,
     ) -> None:
         if query is None:
             raise ValueError("Schema requires a query type.")
@@ -58,7 +62,7 @@ class Schema:
             enums=enum_registry,
             unions=union_registry,
         )
-        self._core = _core.Schema(definition, resolvers, scalar_bindings)
+        self._core = _core.Schema(definition, resolvers, scalar_bindings, debug)
 
     async def execute(
         self,
@@ -112,6 +116,9 @@ def _build_schema_definition(
                 field_meta = _get_field_meta(dc_field)
                 field_name = field_meta.name or dc_field.name
                 annotation = hints.get(dc_field.name, dc_field.type)
+                if _is_internal_field(dc_field.name, annotation):
+                    # keep internal fields on the class but skip them in the schema
+                    continue
                 force_nullable = dc_field.default is None
                 if type_kind == "subscription" and field_meta.resolver is not None:
                     annotation, iterator_optional = _unwrap_async_iterable(annotation)
@@ -153,6 +160,9 @@ def _build_schema_definition(
             hints = _get_type_hints(cls)
             for dc_field in dataclasses.fields(cls):
                 annotation = hints.get(dc_field.name, dc_field.type)
+                if _is_internal_field(dc_field.name, annotation):
+                    # keep internal inputs for python use but skip graphql exposure
+                    continue
                 force_nullable = (
                     dc_field.default is not MISSING
                     or dc_field.default_factory is not MISSING
@@ -240,6 +250,8 @@ def _collect_types(entrypoints: "Iterable[pytype | None]") -> dict[pytype, TypeM
         hints = _get_type_hints(cls)
         for dc_field in dataclasses.fields(cls):
             annotation = hints.get(dc_field.name, dc_field.type)
+            if _is_internal_field(dc_field.name, annotation):
+                continue
             pending.extend(_iter_type_refs(annotation))
             field_meta = _get_field_meta(dc_field)
             if field_meta.resolver is not None:
@@ -276,6 +288,8 @@ def _collect_scalars(
         hints = _get_type_hints(cls)
         for dc_field in dataclasses.fields(cls):
             annotation = hints.get(dc_field.name, dc_field.type)
+            if _is_internal_field(dc_field.name, annotation):
+                continue
             pending.extend(_iter_scalar_refs(annotation))
             field_meta = _get_field_meta(dc_field)
             if field_meta.resolver is not None:
@@ -303,6 +317,8 @@ def _collect_enums(entrypoints: "Iterable[pytype | None]") -> dict[pytype, EnumM
         hints = _get_type_hints(cls)
         for dc_field in dataclasses.fields(cls):
             annotation = hints.get(dc_field.name, dc_field.type)
+            if _is_internal_field(dc_field.name, annotation):
+                continue
             pending.extend(_iter_enum_refs(annotation))
             field_meta = _get_field_meta(dc_field)
             if field_meta.resolver is not None:
@@ -329,6 +345,8 @@ def _collect_unions(entrypoints: "Iterable[pytype | None]") -> dict[pytype, Unio
         hints = _get_type_hints(cls)
         for dc_field in dataclasses.fields(cls):
             annotation = hints.get(dc_field.name, dc_field.type)
+            if _is_internal_field(dc_field.name, annotation):
+                continue
             pending.extend(_iter_union_refs(annotation))
             field_meta = _get_field_meta(dc_field)
             if field_meta.resolver is not None:
@@ -398,6 +416,7 @@ def _wrap_resolver(
 
     arg_defs: list[dict[str, "Any"]] = []
     arg_annotations: dict[str, "Any"] = {}
+    arg_coercers: dict[str, "Callable[[Any], Any] | None"] = {}
     for param in arg_params:
         annotation = hints.get(param.name, param.annotation)
         if annotation is inspect._empty:
@@ -415,6 +434,7 @@ def _wrap_resolver(
             )
         arg_defs.append(arg_def)
         arg_annotations[param.name] = annotation
+        arg_coercers[param.name] = _arg_coercer(annotation)
 
     async def wrapper(parent: "Any", info: "Any", **kwargs: "Any") -> "Any":
         call_kwargs: dict[str, "Any"] = {}
@@ -429,9 +449,11 @@ def _wrap_resolver(
             call_kwargs[context_param.name] = info_obj.context if info_obj else None
         if root_param is not None:
             call_kwargs[root_param.name] = info_obj.root if info_obj else None
-        for name, annotation in arg_annotations.items():
+        for name, _annotation in arg_annotations.items():
             if name in kwargs:
-                call_kwargs[name] = _coerce_value(kwargs[name], annotation)
+                value = kwargs[name]
+                coercer = arg_coercers.get(name)
+                call_kwargs[name] = value if coercer is None else coercer(value)
         result = resolver(**call_kwargs)
         if inspect.isawaitable(result):
             return await result
@@ -469,6 +491,28 @@ def _input_field_default(
     if dc_field.default_factory is not MISSING:
         return _default_value_for_annotation(annotation, dc_field.default_factory())
     return MISSING
+
+
+def _arg_coercer(annotation: "Any") -> "Callable[[Any], Any] | None":
+    if annotation is object:
+        return None
+    return lambda value: _coerce_value(value, annotation)
+
+
+def _is_internal_field(attr_name: str, annotation: "Any") -> bool:
+    if attr_name.startswith("_"):
+        return True
+    inner, _ = _split_optional(annotation)
+    if inner in (Internal, Private):
+        return True
+    origin = get_origin(inner)
+    if origin in (Internal, Private):
+        return True
+    inner = _unwrap_annotated(inner)
+    origin = get_origin(inner)
+    if origin is ClassVar:
+        return True
+    return False
 
 
 def _coerce_value(value: "Any", annotation: "Any") -> "Any":
@@ -631,8 +675,8 @@ def _type_spec_from_annotation(
 
 
 def _get_type_meta(cls: pytype) -> TypeMeta:
-    meta: TypeMeta | None = getattr(cls, "__grommet__", None)
-    if meta is None:
+    meta = getattr(cls, "__grommet_meta__", None)
+    if not isinstance(meta, TypeMeta):
         raise TypeError(
             f"{cls.__name__} is not decorated with @grommet.type, @grommet.interface, or @grommet.input"
         )
@@ -640,22 +684,22 @@ def _get_type_meta(cls: pytype) -> TypeMeta:
 
 
 def _get_scalar_meta(cls: pytype) -> ScalarMeta:
-    meta: ScalarMeta | None = getattr(cls, "__grommet_scalar__", None)
-    if meta is None:
+    meta = getattr(cls, "__grommet_meta__", None)
+    if not isinstance(meta, ScalarMeta):
         raise TypeError(f"{cls.__name__} is not decorated with @grommet.scalar")
     return meta
 
 
 def _get_enum_meta(cls: pytype) -> EnumMeta:
-    meta: EnumMeta | None = getattr(cls, "__grommet_enum__", None)
-    if meta is None:
+    meta = getattr(cls, "__grommet_meta__", None)
+    if not isinstance(meta, EnumMeta):
         raise TypeError(f"{cls.__name__} is not decorated with @grommet.enum")
     return meta
 
 
 def _get_union_meta(cls: pytype) -> UnionMeta:
-    meta: UnionMeta | None = getattr(cls, "__grommet_union__", None)
-    if meta is None:
+    meta = getattr(cls, "__grommet_meta__", None)
+    if not isinstance(meta, UnionMeta):
         raise TypeError(f"{cls.__name__} is not a grommet union")
     return meta
 
@@ -674,19 +718,27 @@ def _get_field_meta(dc_field: "dataclasses.Field[Any]") -> FieldMeta:
 
 
 def _is_grommet_type(obj: "Any") -> bool:
-    return hasattr(obj, "__grommet__")
+    meta = getattr(obj, "__grommet_meta__", None)
+    return isinstance(meta, TypeMeta) and meta.type in (
+        GrommetMetaType.TYPE,
+        GrommetMetaType.INTERFACE,
+        GrommetMetaType.INPUT,
+    )
 
 
 def _is_scalar_type(obj: "Any") -> bool:
-    return hasattr(obj, "__grommet_scalar__")
+    meta = getattr(obj, "__grommet_meta__", None)
+    return isinstance(meta, ScalarMeta)
 
 
 def _is_enum_type(obj: "Any") -> bool:
-    return hasattr(obj, "__grommet_enum__")
+    meta = getattr(obj, "__grommet_meta__", None)
+    return isinstance(meta, EnumMeta)
 
 
 def _is_union_type(obj: "Any") -> bool:
-    return hasattr(obj, "__grommet_union__")
+    meta = getattr(obj, "__grommet_meta__", None)
+    return isinstance(meta, UnionMeta)
 
 
 def _is_input_type(obj: "Any") -> bool:

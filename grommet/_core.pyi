@@ -5,12 +5,15 @@ class SubscriptionStream(AsyncIterator[dict[str, Any]]):
     async def __anext__(self) -> dict[str, Any]: ...
     async def aclose(self) -> None: ...
 
+def configure_runtime(use_current_thread: bool = ..., worker_threads: int | None = ...) -> bool: ...
+
 class Schema:
     def __init__(
         self,
         definition: dict[str, Any],
         resolvers: dict[str, Callable[..., Any]],
         scalar_bindings: list[dict[str, Any]],
+        debug: bool = ...,
     ) -> None: ...
     async def execute(
         self,
