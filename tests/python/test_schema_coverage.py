@@ -4,9 +4,8 @@ import pytest
 
 import grommet as gm
 from grommet.errors import GrommetSchemaError, GrommetTypeError
-from grommet.schema import Schema, _build_schema_definition
-from grommet.metadata import TypeMeta
 from grommet.registry import _traverse_schema
+from grommet.schema import Schema, _build_schema_definition
 
 
 @gm.input
@@ -43,9 +42,7 @@ def test_internal_input_fields_skipped() -> None:
         enums=traversal.enums,
         unions=traversal.unions,
     )
-    input_def = next(
-        item for item in definition["types"] if item["kind"] == "input"
-    )
+    input_def = next(item for item in definition["types"] if item["kind"] == "input")
     field_names = {field["name"] for field in input_def["fields"]}
     assert "hidden" not in field_names
     assert "value" in field_names

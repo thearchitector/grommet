@@ -26,7 +26,9 @@ def _resolver_params(resolver: "Callable[..., Any]") -> list[inspect.Parameter]:
 
 
 def _resolver_arg_params(resolver: "Callable[..., Any]") -> list[inspect.Parameter]:
-    return [p for p in _resolver_params(resolver) if p.name not in _RESERVED_PARAM_NAMES]
+    return [
+        p for p in _resolver_params(resolver) if p.name not in _RESERVED_PARAM_NAMES
+    ]
 
 
 def _find_param(
@@ -93,7 +95,11 @@ def _wrap_resolver(
     async def wrapper(parent: "Any", info: "Any", **kwargs: "Any") -> "Any":
         call_kwargs: dict[str, "Any"] = {}
         info_obj = None
-        if info_param is not None or context_param is not None or root_param is not None:
+        if (
+            info_param is not None
+            or context_param is not None
+            or root_param is not None
+        ):
             info_obj = _normalize_info(info)
         if parent_param is not None:
             call_kwargs[parent_param.name] = parent

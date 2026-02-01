@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
-from typing import Annotated, ClassVar, AsyncIterator as TypingAsyncIterator
+from typing import Annotated, ClassVar
+from typing import AsyncIterator as TypingAsyncIterator
 
 import pytest
 

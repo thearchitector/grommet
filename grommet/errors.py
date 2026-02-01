@@ -44,7 +44,9 @@ def async_iterable_requires_parameter() -> GrommetTypeError:
     return GrommetTypeError("AsyncIterator/AsyncIterable must be parameterized.")
 
 
-def resolver_missing_annotation(resolver_name: str, param_name: str) -> GrommetTypeError:
+def resolver_missing_annotation(
+    resolver_name: str, param_name: str
+) -> GrommetTypeError:
     return GrommetTypeError(
         f"Resolver {resolver_name} missing annotation for '{param_name}'."
     )

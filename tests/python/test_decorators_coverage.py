@@ -127,7 +127,9 @@ def test_classmethod_field_binds_class() -> None:
     class Query:
         @gm.field
         @classmethod
-        async def typename(cls, parent, info) -> str:  # pragma: no cover - called via schema
+        async def typename(
+            cls, parent, info
+        ) -> str:  # pragma: no cover - called via schema
             return cls.__name__
 
     Query = gm.type(Query)
@@ -176,7 +178,9 @@ def test_scalar_direct_call_path() -> None:
     class CustomScalar:
         pass
 
-    CustomScalar = gm.scalar(CustomScalar, serialize=lambda v: v, parse_value=lambda v: v)
+    CustomScalar = gm.scalar(
+        CustomScalar, serialize=lambda v: v, parse_value=lambda v: v
+    )
     assert hasattr(CustomScalar, "__grommet_meta__")
 
 

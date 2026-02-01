@@ -11,8 +11,18 @@ from grommet.errors import (
 @pytest.mark.parametrize(
     ("factory", "args", "exc_type", "message"),
     [
-        (errors.schema_requires_query, (), GrommetSchemaError, "Schema requires a query type."),
-        (errors.unknown_type_kind, ("mystery",), GrommetTypeError, "Unknown type kind: mystery"),
+        (
+            errors.schema_requires_query,
+            (),
+            GrommetSchemaError,
+            "Schema requires a query type.",
+        ),
+        (
+            errors.unknown_type_kind,
+            ("mystery",),
+            GrommetTypeError,
+            "Unknown type kind: mystery",
+        ),
         (
             errors.type_meta_unknown_kind,
             ("ghost",),

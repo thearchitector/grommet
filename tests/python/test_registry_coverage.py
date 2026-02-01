@@ -1,7 +1,7 @@
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
 import enum
-from typing import List, AsyncIterator as TypingAsyncIterator
+from dataclasses import dataclass
+from typing import AsyncIterator as TypingAsyncIterator
+from typing import List
 
 import pytest
 

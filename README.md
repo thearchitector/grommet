@@ -1,8 +1,8 @@
 # grommet
 
-High performance Python GraphQL library inspired by [Strawberry](https://strawberry.rocks/) but backed by [async-graphql](https://async-graphql.github.io/async-graphql/en/index.html).
+High performance Python GraphQL server library inspired by [Strawberry](https://strawberry.rocks/) and backed by [async-graphql](https://async-graphql.github.io/async-graphql/en/index.html).
 
-This is an experiment in a nearly 100% AI-written library. I provided guidelines and design guidance through review of the generated code and curated revision plans.
+This is an experiment in a nearly 100% AI-written project. I provide guidelines and design guidance through review of the generated code and curated revision plans, but AI does the heavy lifting (until I run out of credits).
 
 ## Example
 
