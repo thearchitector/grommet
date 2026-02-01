@@ -19,30 +19,20 @@ class Query:
 
 
 @pytest.mark.anyio
-async def test_error_includes_path_location_and_traceback_when_debug() -> None:
-    schema = gm.Schema(query=Query, debug=True)
+async def test_error_includes_path_location_and_omits_traceback() -> None:
+    schema = gm.Schema(query=Query)
     result = await schema.execute("{ boom }")
 
     if result["data"] is not None:
         assert result["data"]["boom"] is None
     assert result["errors"], "Expected GraphQL error"
-    assert "extensions" in result
 
     err = result["errors"][0]
     if "path" in err:
         assert err["path"] == ["boom"]
     assert err["locations"], "Expected locations on error"
-    assert "extensions" in err
-    assert "traceback" in err["extensions"]
-
-
-@pytest.mark.anyio
-async def test_error_omits_traceback_when_debug_false() -> None:
-    schema = gm.Schema(query=Query)
-    result = await schema.execute("{ boom }")
-
-    err = result["errors"][0]
-    assert "extensions" not in err
+    if "extensions" in err:
+        assert "traceback" not in err["extensions"]
 
 
 @pytest.mark.anyio

@@ -3,8 +3,20 @@ import enum
 import functools
 import inspect
 from builtins import type as pytype
-from typing import TYPE_CHECKING, ParamSpec, TypeVar, overload
+from typing import TYPE_CHECKING, ParamSpec, TypeVar, cast, overload
 
+from .errors import (
+    dataclass_required,
+    decorator_requires_callable,
+    enum_requires_enum_subclass,
+    field_default_conflict,
+    input_field_resolver_not_allowed,
+    resolver_missing_return_annotation,
+    scalar_requires_callables,
+    union_requires_name,
+    union_requires_object_types,
+    union_requires_types,
+)
 from .metadata import (
     MISSING,
     EnumMeta,
@@ -13,6 +25,10 @@ from .metadata import (
     ScalarMeta,
     TypeMeta,
     UnionMeta,
+    _register_enum,
+    _register_scalar,
+    _register_type,
+    _register_union,
 )
 
 P = ParamSpec("P")
@@ -20,7 +36,14 @@ R = TypeVar("R")
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
-    from typing import Any
+    from typing import Any, Protocol
+
+    from .metadata import GrommetMeta
+
+    class GrommetClass(Protocol):
+        __grommet_meta__: GrommetMeta
+
+        def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 class _FieldResolver:
@@ -76,7 +99,7 @@ def _field_from_resolver(
         name=name,
     )
     if default is not MISSING and default_factory is not MISSING:
-        raise TypeError("field() cannot specify both default and default_factory.")
+        raise field_default_conflict()
     metadata = {"grommet": meta}
     field_def: "dataclasses.Field[Any]"
     if default is not MISSING:
@@ -113,9 +136,8 @@ def _apply_field_resolvers(target: pytype) -> tuple[pytype, bool]:
                 "return", inspect._empty
             )
             if return_annotation is inspect._empty:
-                raise TypeError(
-                    f"Resolver {marker.resolver.__name__} missing return annotation "
-                    f"for field '{field_name}'."
+                raise resolver_missing_return_annotation(
+                    marker.resolver.__name__, field_name
                 )
             annotations[field_name] = return_annotation
 
@@ -138,18 +160,40 @@ def _apply_field_resolvers(target: pytype) -> tuple[pytype, bool]:
     return target, True
 
 
+@overload
+def type(
+    cls: pytype,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    implements: "Iterable[pytype] | None" = None,
+) -> "GrommetClass": ...
+
+
+@overload
+def type(
+    cls: None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    implements: "Iterable[pytype] | None" = None,
+) -> "Callable[[pytype], GrommetClass]": ...
+
+
 def type(
     cls: pytype | None = None,
     *,
     name: str | None = None,
     description: str | None = None,
     implements: "Iterable[pytype] | None" = None,
-) -> "Callable[[pytype], pytype] | pytype":
+) -> "Callable[[pytype], GrommetClass] | GrommetClass":
+    """Marks a dataclass as a GraphQL object type."""
+
     def wrap(target: pytype) -> pytype:
-        target, applied = _apply_field_resolvers(target)
         if not dataclasses.is_dataclass(target):
-            target = dataclasses.dataclass(target)
-        elif applied:
+            raise dataclass_required("@grommet.type")
+        target, applied = _apply_field_resolvers(target)
+        if applied:
             params = target.__dataclass_params__  # type: ignore[attr-defined]
             target = dataclasses.dataclass(
                 target,
@@ -171,11 +215,30 @@ def type(
             implements=tuple(implements or ()),
         )
         _set_grommet_attr(target, "__grommet_meta__", meta)
+        _register_type(target, meta)
         return target
 
     if cls is None:
-        return wrap
-    return wrap(cls)
+        return cast("Callable[[pytype], GrommetClass]", wrap)
+    return cast("GrommetClass", wrap(cls))
+
+
+@overload
+def input(
+    cls: pytype,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> "GrommetClass": ...
+
+
+@overload
+def input(
+    cls: None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> "Callable[[pytype], GrommetClass]": ...
 
 
 def input(
@@ -183,21 +246,44 @@ def input(
     *,
     name: str | None = None,
     description: str | None = None,
-) -> "Callable[[pytype], pytype] | pytype":
+) -> "Callable[[pytype], GrommetClass] | GrommetClass":
+    """Marks a dataclass as a GraphQL input type."""
+
     def wrap(target: pytype) -> pytype:
         if any(isinstance(value, _FieldResolver) for value in vars(target).values()):
-            raise TypeError("Input types cannot declare field resolvers.")
+            raise input_field_resolver_not_allowed()
         if not dataclasses.is_dataclass(target):
-            target = dataclasses.dataclass(target)
+            raise dataclass_required("@grommet.input")
         meta = TypeMeta(
             kind="input", name=name or target.__name__, description=description
         )
         _set_grommet_attr(target, "__grommet_meta__", meta)
+        _register_type(target, meta)
         return target
 
     if cls is None:
-        return wrap
-    return wrap(cls)
+        return cast("Callable[[pytype], GrommetClass]", wrap)
+    return cast("GrommetClass", wrap(cls))
+
+
+@overload
+def interface(
+    cls: pytype,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    implements: "Iterable[pytype] | None" = None,
+) -> "GrommetClass": ...
+
+
+@overload
+def interface(
+    cls: None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    implements: "Iterable[pytype] | None" = None,
+) -> "Callable[[pytype], GrommetClass]": ...
 
 
 def interface(
@@ -206,12 +292,14 @@ def interface(
     name: str | None = None,
     description: str | None = None,
     implements: "Iterable[pytype] | None" = None,
-) -> "Callable[[pytype], pytype] | pytype":
+) -> "Callable[[pytype], GrommetClass] | GrommetClass":
+    """Marks a dataclass as a GraphQL interface type."""
+
     def wrap(target: pytype) -> pytype:
-        target, applied = _apply_field_resolvers(target)
         if not dataclasses.is_dataclass(target):
-            target = dataclasses.dataclass(target)
-        elif applied:
+            raise dataclass_required("@grommet.interface")
+        target, applied = _apply_field_resolvers(target)
+        if applied:
             params = target.__dataclass_params__  # type: ignore[attr-defined]
             target = dataclasses.dataclass(
                 target,
@@ -233,11 +321,12 @@ def interface(
             implements=tuple(implements or ()),
         )
         _set_grommet_attr(target, "__grommet_meta__", meta)
+        _register_type(target, meta)
         return target
 
     if cls is None:
-        return wrap
-    return wrap(cls)
+        return cast("Callable[[pytype], GrommetClass]", wrap)
+    return cast("GrommetClass", wrap(cls))
 
 
 @overload
@@ -276,6 +365,8 @@ def field(
     default_factory: "Callable[[], Any] | Any" = MISSING,
     init: bool | None = None,
 ) -> "_FieldResolver | Callable[[Callable[..., Any]], _FieldResolver]":
+    """Declares a resolver-backed field on a GraphQL type."""
+
     def wrap(target: "Callable[..., Any]") -> _FieldResolver:
         func = target
         bind_to_class = False
@@ -285,7 +376,7 @@ def field(
         elif isinstance(func, staticmethod):
             func = func.__func__
         if not callable(func):
-            raise TypeError("Decorator usage expects a callable resolver.")
+            raise decorator_requires_callable()
         return _FieldResolver(
             func,
             description=description,
@@ -302,6 +393,30 @@ def field(
     return wrap(func)
 
 
+@overload
+def scalar(
+    cls: pytype,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    specified_by_url: str | None = None,
+    serialize: "Callable[[Any], Any] | None" = None,
+    parse_value: "Callable[[Any], Any] | None" = None,
+) -> "GrommetClass": ...
+
+
+@overload
+def scalar(
+    cls: None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    specified_by_url: str | None = None,
+    serialize: "Callable[[Any], Any] | None" = None,
+    parse_value: "Callable[[Any], Any] | None" = None,
+) -> "Callable[[pytype], GrommetClass]": ...
+
+
 def scalar(
     cls: pytype | None = None,
     *,
@@ -310,9 +425,11 @@ def scalar(
     specified_by_url: str | None = None,
     serialize: "Callable[[Any], Any] | None" = None,
     parse_value: "Callable[[Any], Any] | None" = None,
-) -> "Callable[[pytype], pytype] | pytype":
+) -> "Callable[[pytype], GrommetClass] | GrommetClass":
+    """Registers a dataclass as a GraphQL scalar type."""
+
     if serialize is None or parse_value is None:
-        raise TypeError("scalar() requires serialize and parse_value callables.")
+        raise scalar_requires_callables()
 
     def wrap(target: pytype) -> pytype:
         meta = ScalarMeta(
@@ -323,11 +440,30 @@ def scalar(
             specified_by_url=specified_by_url,
         )
         _set_grommet_attr(target, "__grommet_meta__", meta)
+        _register_scalar(target)
         return target
 
     if cls is None:
-        return wrap
-    return wrap(cls)
+        return cast("Callable[[pytype], GrommetClass]", wrap)
+    return cast("GrommetClass", wrap(cls))
+
+
+@overload
+def enum_type(
+    cls: pytype,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> "GrommetClass": ...
+
+
+@overload
+def enum_type(
+    cls: None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> "Callable[[pytype], GrommetClass]": ...
 
 
 def enum_type(
@@ -335,17 +471,20 @@ def enum_type(
     *,
     name: str | None = None,
     description: str | None = None,
-) -> "Callable[[pytype], pytype] | pytype":
+) -> "Callable[[pytype], GrommetClass] | GrommetClass":
+    """Registers an enum.Enum subclass as a GraphQL enum."""
+
     def wrap(target: pytype) -> pytype:
         if not issubclass(target, enum.Enum):
-            raise TypeError("@grommet.enum requires an enum.Enum subclass.")
+            raise enum_requires_enum_subclass()
         meta = EnumMeta(name=name or target.__name__, description=description)
         _set_grommet_attr(target, "__grommet_meta__", meta)
+        _register_enum(target)
         return target
 
     if cls is None:
-        return wrap
-    return wrap(cls)
+        return cast("Callable[[pytype], GrommetClass]", wrap)
+    return cast("GrommetClass", wrap(cls))
 
 
 def union(
@@ -353,17 +492,20 @@ def union(
     *,
     types: "Iterable[pytype]",
     description: str | None = None,
-) -> pytype:
+) -> "GrommetClass":
+    """Creates a GraphQL union type."""
+
     if not name:
-        raise TypeError("union() requires a name.")
+        raise union_requires_name()
     type_list = tuple(types)
     if not type_list:
-        raise TypeError("union() requires at least one possible type.")
+        raise union_requires_types()
     for tp in type_list:
         meta = getattr(tp, "__grommet_meta__", None)
         if meta is None or meta.type is not GrommetMetaType.TYPE:
-            raise TypeError("union() types must be @grommet.type object types.")
+            raise union_requires_object_types()
     meta = UnionMeta(name=name, types=type_list, description=description)
     target = pytype(name, (), {})
     _set_grommet_attr(target, "__grommet_meta__", meta)
-    return target
+    _register_union(target)
+    return cast("GrommetClass", target)

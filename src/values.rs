@@ -1,11 +1,14 @@
 use std::collections::HashSet;
 
 use async_graphql::dynamic::{FieldValue, ResolverContext, TypeRef, ValueAccessor};
-use async_graphql::{Error, ErrorExtensionValues, Name, Value};
+use async_graphql::{Name, Value};
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyBytes, PyDict, PyList, PyTuple};
 use pyo3::IntoPyObject;
 
+use crate::errors::{
+    abstract_type_requires_object, expected_list_value, py_value_error, unsupported_value_type,
+};
 use crate::types::{PyObj, ScalarBinding};
 
 // translate values between python and async-graphql
@@ -31,10 +34,18 @@ fn value_accessor_to_value(value: &ValueAccessor<'_>) -> Value {
 }
 
 pub(crate) fn pyobj_to_value(value: &PyObj, scalar_bindings: &[ScalarBinding]) -> PyResult<Value> {
-    Python::with_gil(|py| {
-        let bound = value.inner.bind(py);
+    Python::attach(|py| {
+        let bound = value.bind(py);
         py_to_value(py, &bound, scalar_bindings, true)
     })
+}
+
+pub(crate) fn py_to_const_value(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    scalar_bindings: &[ScalarBinding],
+) -> PyResult<Value> {
+    py_to_value(py, value, scalar_bindings, true)
 }
 
 fn scalar_binding_for_value<'a>(
@@ -43,8 +54,8 @@ fn scalar_binding_for_value<'a>(
     scalar_bindings: &'a [ScalarBinding],
 ) -> PyResult<Option<&'a ScalarBinding>> {
     for binding in scalar_bindings {
-        let py_type = binding.py_type.inner.bind(py);
-        let is_instance = value.is_instance(py_type)?;
+        let py_type = binding.py_type.bind(py);
+        let is_instance = value.is_instance(&py_type)?;
         if is_instance {
             return Ok(Some(binding));
         }
@@ -124,7 +135,7 @@ pub(crate) fn py_to_field_value_for_type(
             py_to_field_value_for_type(py, value, inner, scalar_bindings, abstract_types)
         }
         TypeRef::List(inner) => {
-            if let Ok(seq) = value.downcast::<PyList>() {
+            if let Ok(seq) = value.cast::<PyList>() {
                 let mut items = Vec::with_capacity(seq.len());
                 for item in seq.iter() {
                     items.push(py_to_field_value_for_type(
@@ -136,7 +147,7 @@ pub(crate) fn py_to_field_value_for_type(
                     )?);
                 }
                 Ok(FieldValue::list(items))
-            } else if let Ok(seq) = value.downcast::<PyTuple>() {
+            } else if let Ok(seq) = value.cast::<PyTuple>() {
                 let mut items = Vec::with_capacity(seq.len());
                 for item in seq.iter() {
                     items.push(py_to_field_value_for_type(
@@ -149,21 +160,14 @@ pub(crate) fn py_to_field_value_for_type(
                 }
                 Ok(FieldValue::list(items))
             } else {
-                Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                    "Expected list for GraphQL list type",
-                ))
+                Err(expected_list_value())
             }
         }
         TypeRef::Named(name) => {
             if abstract_types.contains(name.as_ref()) {
-                let type_name = grommet_type_name(py, value)?.ok_or_else(|| {
-                    PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                        "Abstract types must return @grommet.type objects",
-                    )
-                })?;
-                let inner = FieldValue::owned_any(PyObj {
-                    inner: value.clone().unbind(),
-                });
+                let type_name =
+                    grommet_type_name(py, value)?.ok_or_else(|| abstract_type_requires_object())?;
+                let inner = FieldValue::owned_any(PyObj::new(value.clone().unbind()));
                 Ok(inner.with_type(type_name))
             } else {
                 py_to_field_value(py, value, scalar_bindings)
@@ -178,7 +182,7 @@ fn py_to_field_value(
     scalar_bindings: &[ScalarBinding],
 ) -> PyResult<FieldValue<'static>> {
     if let Some(binding) = scalar_binding_for_value(py, value, scalar_bindings)? {
-        let serialized = binding.serialize.inner.call1(py, (value,))?;
+        let serialized = binding.serialize.clone_ref(py).call1(py, (value,))?;
         let serialized = serialized.bind(py);
         let value = py_to_value(py, &serialized, scalar_bindings, false)?;
         return Ok(FieldValue::value(value));
@@ -201,23 +205,21 @@ fn py_to_field_value(
     if let Ok(s) = value.extract::<String>() {
         return Ok(FieldValue::value(Value::String(s)));
     }
-    if let Ok(seq) = value.downcast::<PyList>() {
+    if let Ok(seq) = value.cast::<PyList>() {
         let mut items = Vec::with_capacity(seq.len());
         for item in seq.iter() {
             items.push(py_to_field_value(py, &item, scalar_bindings)?);
         }
         return Ok(FieldValue::list(items));
     }
-    if let Ok(seq) = value.downcast::<PyTuple>() {
+    if let Ok(seq) = value.cast::<PyTuple>() {
         let mut items = Vec::with_capacity(seq.len());
         for item in seq.iter() {
             items.push(py_to_field_value(py, &item, scalar_bindings)?);
         }
         return Ok(FieldValue::list(items));
     }
-    Ok(FieldValue::owned_any(PyObj {
-        inner: value.clone().unbind(),
-    }))
+    Ok(FieldValue::owned_any(PyObj::new(value.clone().unbind())))
 }
 
 pub(crate) fn py_to_value(
@@ -228,7 +230,7 @@ pub(crate) fn py_to_value(
 ) -> PyResult<Value> {
     if allow_scalar {
         if let Some(binding) = scalar_binding_for_value(py, value, scalar_bindings)? {
-            let serialized = binding.serialize.inner.call1(py, (value,))?;
+            let serialized = binding.serialize.clone_ref(py).call1(py, (value,))?;
             let serialized = serialized.bind(py);
             return py_to_value(py, &serialized, scalar_bindings, false);
         }
@@ -254,34 +256,35 @@ pub(crate) fn py_to_value(
     if let Ok(s) = value.extract::<String>() {
         return Ok(Value::String(s));
     }
-    if let Ok(bytes) = value.downcast::<PyBytes>() {
+    if let Ok(bytes) = value.cast::<PyBytes>() {
         return Ok(Value::Binary(bytes.as_bytes().to_vec().into()));
     }
-    if let Ok(list) = value.downcast::<PyList>() {
+    if let Ok(list) = value.cast::<PyList>() {
         let mut items = Vec::with_capacity(list.len());
         for item in list.iter() {
             items.push(py_to_value(py, &item, scalar_bindings, true)?);
         }
         return Ok(Value::List(items));
     }
-    if let Ok(tuple) = value.downcast::<PyTuple>() {
+    if let Ok(tuple) = value.cast::<PyTuple>() {
         let mut items = Vec::with_capacity(tuple.len());
         for item in tuple.iter() {
             items.push(py_to_value(py, &item, scalar_bindings, true)?);
         }
         return Ok(Value::List(items));
     }
-    if let Ok(dict) = value.downcast::<PyDict>() {
+    if let Ok(dict) = value.cast::<PyDict>() {
         let mut map = indexmap::IndexMap::new();
         for (key, value) in dict.iter() {
             let key: String = key.extract()?;
-            map.insert(Name::new(key), py_to_value(py, &value, scalar_bindings, true)?);
+            map.insert(
+                Name::new(key),
+                py_to_value(py, &value, scalar_bindings, true)?,
+            );
         }
         return Ok(Value::Object(map));
     }
-    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        "Unsupported value type",
-    ))
+    Err(unsupported_value_type())
 }
 
 fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
@@ -291,10 +294,12 @@ fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
         Value::Number(number) => {
             if let Some(i) = number.as_i64() {
                 Ok(i.into_pyobject(py)?.into_any().unbind())
-            } else if let Some(f) = number.as_f64() {
-                Ok(f.into_pyobject(py)?.into_any().unbind())
             } else {
-                Ok(py.None())
+                Ok(number
+                    .as_f64()
+                    .map(|f| f.into_pyobject(py).map(|value| value.into_any().unbind()))
+                    .transpose()?
+                    .unwrap_or_else(|| py.None()))
             }
         }
         Value::String(s) => Ok(s.into_pyobject(py)?.into_any().unbind()),
@@ -314,37 +319,6 @@ fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
             Ok(dict.into_any().unbind())
         }
         Value::Binary(bytes) => Ok(PyBytes::new(py, bytes).into_any().unbind()),
-    }
-}
-
-fn json_to_py(py: Python<'_>, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
-    match value {
-        serde_json::Value::Null => Ok(py.None()),
-        serde_json::Value::Bool(value) => Ok(value.into_pyobject(py)?.to_owned().into_any().unbind()),
-        serde_json::Value::Number(value) => {
-            if let Some(value) = value.as_i64() {
-                Ok(value.into_pyobject(py)?.into_any().unbind())
-            } else if let Some(value) = value.as_f64() {
-                Ok(value.into_pyobject(py)?.into_any().unbind())
-            } else {
-                Ok(py.None())
-            }
-        }
-        serde_json::Value::String(value) => Ok(value.into_pyobject(py)?.into_any().unbind()),
-        serde_json::Value::Array(items) => {
-            let list = PyList::empty(py);
-            for item in items {
-                list.append(json_to_py(py, item)?)?;
-            }
-            Ok(list.into_any().unbind())
-        }
-        serde_json::Value::Object(map) => {
-            let dict = PyDict::new(py);
-            for (key, value) in map {
-                dict.set_item(key, json_to_py(py, value)?)?;
-            }
-            Ok(dict.into_any().unbind())
-        }
     }
 }
 
@@ -375,8 +349,8 @@ pub(crate) fn response_to_py<'py>(
             }
             err_dict.set_item("locations", locs)?;
         }
+        let path_list = PyList::empty(py);
         if !err.path.is_empty() {
-            let path_list = PyList::empty(py);
             for seg in err.path {
                 match seg {
                     async_graphql::PathSegment::Field(name) => {
@@ -387,14 +361,15 @@ pub(crate) fn response_to_py<'py>(
                     }
                 }
             }
+        }
+        if path_list.len() > 0 {
             err_dict.set_item("path", path_list)?;
         }
         if let Some(extensions) = err.extensions {
-            let json = serde_json::to_value(extensions).map_err(|err| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(err.to_string())
-            })?;
-            if !matches!(json, serde_json::Value::Object(ref map) if map.is_empty()) {
-                err_dict.set_item("extensions", json_to_py(py, &json)?)?;
+            let ext_value = async_graphql::to_value(extensions)
+                .map_err(|err| py_value_error(err.to_string()))?;
+            if !matches!(ext_value, Value::Object(ref map) if map.is_empty()) {
+                err_dict.set_item("extensions", value_to_py(py, &ext_value)?)?;
             }
         }
         errors_list.append(err_dict)?;
@@ -403,36 +378,86 @@ pub(crate) fn response_to_py<'py>(
     Ok(out.into_any().unbind())
 }
 
-pub(crate) fn py_err_to_error(err: PyErr, debug: bool) -> Error {
-    let message = err.to_string();
-    if !debug {
-        return Error::new(message);
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    use crate::errors::py_err_to_error;
+    use async_graphql::dynamic::{Field, FieldFuture, InputValue, Object, Schema};
+    use async_graphql::{Pos, Request, Response, ServerError, Value};
+    use pyo3::types::{PyAnyMethods, PyDict, PyList};
+    use pyo3::IntoPyObject;
+    use std::collections::HashSet;
+
+    fn with_py<F, R>(f: F) -> R
+    where
+        F: for<'py> FnOnce(Python<'py>) -> R,
+    {
+        Python::initialize();
+        Python::attach(f)
     }
-    let traceback = Python::with_gil(|py| -> PyResult<Option<String>> {
-        let traceback_mod = py.import("traceback")?;
-        let err_type = err.get_type(py);
-        let err_value = err.value(py);
-        let err_traceback = err.traceback(py);
-        let err_traceback = err_traceback
-            .map(|traceback| traceback.into_any().unbind())
-            .unwrap_or_else(|| py.None());
-        let formatted = traceback_mod.call_method1(
-            "format_exception",
-            (err_type, err_value, err_traceback),
-        )?;
-        let lines: Vec<String> = formatted.extract()?;
-        Ok(Some(lines.join("")))
-    })
-    .unwrap_or(None);
-    if let Some(traceback) = traceback {
-        let mut extensions = ErrorExtensionValues::default();
-        extensions.set("traceback", traceback);
-        Error {
-            message,
-            source: None,
-            extensions: Some(extensions),
-        }
-    } else {
-        Error::new(message)
+
+    #[test]
+    fn build_kwargs_sets_items_from_args() {
+        with_py(|py| {
+            let arg_names = vec!["count".to_string()];
+            let field = Field::new("echo", TypeRef::named("Int"), move |ctx| {
+                let arg_names = arg_names.clone();
+                FieldFuture::new(async move {
+                    Python::attach(|py| {
+                        let kwargs = build_kwargs(py, &ctx, &arg_names)?;
+                        let value = kwargs.get_item("count")?.unwrap();
+                        assert_eq!(value.extract::<i64>()?, 2);
+                        Ok::<_, PyErr>(())
+                    })
+                    .map_err(py_err_to_error)?;
+                    Ok(Some(FieldValue::value(Value::from(1))))
+                })
+            })
+            .argument(InputValue::new("count", TypeRef::named("Int")));
+            let query = Object::new("Query").field(field);
+            let schema = Schema::build("Query", None, None)
+                .register(query)
+                .finish()
+                .unwrap();
+
+            pyo3_async_runtimes::tokio::run(py, async move {
+                let request = Request::new("query { echo(count: 2) }");
+                let _ = schema.execute(request).await;
+                Ok(())
+            })
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn py_to_field_value_for_type_handles_list_and_tuple() {
+        with_py(|py| {
+            let list_ref = TypeRef::List(Box::new(TypeRef::named("Int")));
+            let list = PyList::new(py, [1, 2]).unwrap();
+            let list_any = list.into_any();
+            let _ =
+                py_to_field_value_for_type(py, &list_any, &list_ref, &[], &HashSet::new()).unwrap();
+
+            let tuple_any = (1, 2).into_pyobject(py).unwrap().into_any();
+            let _ = py_to_field_value_for_type(py, &tuple_any, &list_ref, &[], &HashSet::new())
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn response_to_py_includes_locations() {
+        with_py(|py| {
+            let error = ServerError::new("boom", Some(Pos { line: 1, column: 2 }));
+            let mut response = Response::new(Value::Null);
+            response.errors.push(error);
+
+            let result = response_to_py(py, response).unwrap();
+            let dict = result.bind(py).cast::<PyDict>().unwrap();
+            let errors_any = dict.get_item("errors").unwrap().unwrap();
+            let errors = errors_any.cast::<PyList>().unwrap();
+            let err = errors.get_item(0).unwrap();
+            let err = err.cast::<PyDict>().unwrap();
+            assert!(err.get_item("locations").unwrap().is_some());
+        });
     }
 }

@@ -67,9 +67,7 @@ SearchResult = gm.union("SearchResult", types=[Book, Movie])
 class SearchQuery:
     @gm.field
     @staticmethod
-    async def result(
-        parent: "Any", info: "Any", kind: str
-    ) -> SearchResult:  # type: ignore[valid-type]
+    async def result(parent: "Any", info: "Any", kind: str) -> SearchResult:  # type: ignore[valid-type]
         if kind == "book":
             return Book(title="Dune")
         return Movie(title="Alien")
@@ -88,7 +86,7 @@ async def test_enum_input_output() -> None:
 
 @pytest.mark.anyio
 async def test_interface_resolution() -> None:
-    schema = gm.Schema(query=NodeQuery, types=[User])
+    schema = gm.Schema(query=NodeQuery)
     result = await schema.execute("{ node { id ... on User { name } } }")
 
     assert result["data"]["node"] == {"id": "1", "name": "Ada"}
@@ -96,7 +94,7 @@ async def test_interface_resolution() -> None:
 
 @pytest.mark.anyio
 async def test_union_resolution() -> None:
-    schema = gm.Schema(query=SearchQuery, types=[Book, Movie])
+    schema = gm.Schema(query=SearchQuery)
     result = await schema.execute(
         "query ($kind: String!) { result(kind: $kind) { ... on Book { title } ... on Movie { title } } }",
         variables={"kind": "book"},

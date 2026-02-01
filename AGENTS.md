@@ -32,7 +32,7 @@ def foo(bar: "Callable[[Any], Any]") -> None:
     pass
 
 # `list` is a builtin type, so no import is necessary and thus it can be used directly. `Any` is only used
-# for typing, so it is forward referenced in the function signature. 
+# for typing, so it is forward referenced in the function signature.
 def hello(tomato: list["Any"]) -> str | None:
     pass
 

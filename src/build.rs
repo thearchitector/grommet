@@ -2,23 +2,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_graphql::dynamic::{
-    Enum, Field, FieldFuture, FieldValue, InputObject, InputValue, Interface,
-    InterfaceField, Object, ResolverContext, Scalar, Schema, Subscription,
-    SubscriptionField, SubscriptionFieldFuture, TypeRef,
+    Enum, Field, FieldFuture, InputObject, InputValue, Interface, InterfaceField, Object, Scalar,
+    Schema, Subscription, SubscriptionField, SubscriptionFieldFuture, TypeRef,
 };
-use async_graphql::futures_util::stream::{self, BoxStream, StreamExt};
-use async_graphql::Error;
-use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyDict, PyTuple};
 
+use crate::errors::{py_value_error, unknown_type_kind};
+use crate::resolver::{resolve_field, resolve_subscription_stream};
 use crate::types::{
-    ContextValue, EnumDef, FieldDef, PyObj, RootValue, ScalarBinding, ScalarDef, SchemaDef,
-    TypeDef, UnionDef,
+    EnumDef, FieldDef, PyObj, ScalarBinding, ScalarDef, SchemaDef, TypeDef, UnionDef,
 };
-use crate::values::{
-    build_kwargs, py_err_to_error, py_to_field_value_for_type, pyobj_to_value,
-};
+use crate::values::pyobj_to_value;
 
 // assemble the async-graphql schema from python-provided definitions
 pub(crate) fn build_schema(
@@ -29,7 +23,6 @@ pub(crate) fn build_schema(
     union_defs: Vec<UnionDef>,
     resolver_map: HashMap<String, PyObj>,
     scalar_bindings: Arc<Vec<ScalarBinding>>,
-    debug: bool,
 ) -> PyResult<Schema> {
     let mut builder = Schema::build(
         schema_def.query.as_str(),
@@ -92,13 +85,13 @@ pub(crate) fn build_schema(
                     object = object.implement(implement.as_str());
                 }
                 for field_def in type_def.fields {
-                    object = object.field(build_field(
+                    let field = build_field(
                         field_def,
                         &resolver_map,
                         scalar_bindings.clone(),
                         abstract_types.clone(),
-                        debug,
-                    )?);
+                    )?;
+                    object = object.field(field);
                 }
                 builder = builder.register(object);
             }
@@ -111,10 +104,8 @@ pub(crate) fn build_schema(
                     interface = interface.implement(implement.as_str());
                 }
                 for field_def in type_def.fields {
-                    interface = interface.field(build_interface_field(
-                        field_def,
-                        scalar_bindings.clone(),
-                    )?);
+                    interface =
+                        interface.field(build_interface_field(field_def, scalar_bindings.clone())?);
                 }
                 builder = builder.register(interface);
             }
@@ -124,13 +115,13 @@ pub(crate) fn build_schema(
                     subscription = subscription.description(desc.as_str());
                 }
                 for field_def in type_def.fields {
-                    subscription = subscription.field(build_subscription_field(
+                    let field = build_subscription_field(
                         field_def,
                         &resolver_map,
                         scalar_bindings.clone(),
                         abstract_types.clone(),
-                        debug,
-                    )?);
+                    )?;
+                    subscription = subscription.field(field);
                 }
                 builder = builder.register(subscription);
             }
@@ -145,16 +136,14 @@ pub(crate) fn build_schema(
                 builder = builder.register(input);
             }
             _ => {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    format!("Unknown type kind: {}", type_def.kind),
-                ))
+                return Err(unknown_type_kind(type_def.kind.as_str()));
             }
         }
     }
 
     builder
         .finish()
-        .map_err(|err| PyErr::new::<pyo3::exceptions::PyValueError, _>(err.to_string()))
+        .map_err(|err| py_value_error(err.to_string()))
 }
 
 fn build_field(
@@ -162,7 +151,6 @@ fn build_field(
     resolver_map: &HashMap<String, PyObj>,
     scalar_bindings: Arc<Vec<ScalarBinding>>,
     abstract_types: Arc<HashSet<String>>,
-    debug: bool,
 ) -> PyResult<Field> {
     let resolver = field_def
         .resolver
@@ -194,7 +182,6 @@ fn build_field(
                 scalars,
                 output_type,
                 abstract_types,
-                debug,
             )
             .await
         })
@@ -204,8 +191,8 @@ fn build_field(
         let arg_ref = parse_type_ref(arg_def.type_name.as_str());
         let mut input_value = InputValue::new(arg_def.name, arg_ref);
         if let Some(default_value) = arg_def.default_value.as_ref() {
-            let value = pyobj_to_value(default_value, scalar_bindings.as_ref())?;
-            input_value = input_value.default_value(value);
+            input_value =
+                input_value.default_value(pyobj_to_value(default_value, scalar_bindings.as_ref())?);
         }
         field = field.argument(input_value);
     }
@@ -228,8 +215,8 @@ fn build_interface_field(
         let arg_ref = parse_type_ref(arg_def.type_name.as_str());
         let mut input_value = InputValue::new(arg_def.name, arg_ref);
         if let Some(default_value) = arg_def.default_value.as_ref() {
-            let value = pyobj_to_value(default_value, scalar_bindings.as_ref())?;
-            input_value = input_value.default_value(value);
+            input_value =
+                input_value.default_value(pyobj_to_value(default_value, scalar_bindings.as_ref())?);
         }
         field = field.argument(input_value);
     }
@@ -247,7 +234,6 @@ fn build_subscription_field(
     resolver_map: &HashMap<String, PyObj>,
     scalar_bindings: Arc<Vec<ScalarBinding>>,
     abstract_types: Arc<HashSet<String>>,
-    debug: bool,
 ) -> PyResult<SubscriptionField> {
     let resolver = field_def
         .resolver
@@ -270,7 +256,7 @@ fn build_subscription_field(
         let output_type = output_type.clone();
         let abstract_types = abstract_types.clone();
         SubscriptionFieldFuture::new(async move {
-            resolve_subscription_field(
+            resolve_subscription_stream(
                 ctx,
                 resolver,
                 arg_names,
@@ -279,7 +265,6 @@ fn build_subscription_field(
                 scalars,
                 output_type,
                 abstract_types,
-                debug,
             )
             .await
         })
@@ -310,8 +295,8 @@ fn build_input_field(
     let arg_ref = parse_type_ref(field_def.type_name.as_str());
     let mut input_value = InputValue::new(field_def.name, arg_ref);
     if let Some(default_value) = field_def.default_value.as_ref() {
-        let value = pyobj_to_value(default_value, scalar_bindings.as_ref())?;
-        input_value = input_value.default_value(value);
+        input_value =
+            input_value.default_value(pyobj_to_value(default_value, scalar_bindings.as_ref())?);
     }
     Ok(input_value)
 }
@@ -338,330 +323,161 @@ fn parse_type_ref(type_name: &str) -> TypeRef {
     }
 }
 
-async fn resolve_field(
-    ctx: ResolverContext<'_>,
-    resolver: Option<PyObj>,
-    arg_names: Arc<Vec<String>>,
-    field_name: Arc<String>,
-    source_name: Arc<String>,
-    scalar_bindings: Arc<Vec<ScalarBinding>>,
-    output_type: TypeRef,
-    abstract_types: Arc<HashSet<String>>,
-    debug: bool,
-) -> Result<Option<FieldValue<'_>>, Error> {
-    let root_value = ctx.data::<RootValue>().ok().map(|root| root.0.clone());
-    let parent = ctx
-        .parent_value
-        .try_downcast_ref::<PyObj>()
-        .ok()
-        .cloned()
-        .or_else(|| root_value.clone());
-    let context = ctx
-        .data::<ContextValue>()
-        .ok()
-        .map(|ctx| ctx.0.clone());
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    use crate::types::{ArgDef, FieldDef, SchemaDef, TypeDef};
+    use pyo3::types::PyInt;
+    use std::collections::HashMap;
 
-    if let Some(resolver) = resolver {
-        let result = Python::with_gil(|py| -> PyResult<(bool, Py<PyAny>)> {
-            let kwargs = build_kwargs(py, &ctx, &arg_names)?;
-            let info = PyDict::new(py);
-            info.set_item("field_name", field_name.as_str())?;
-            if let Some(ctx_obj) = context.as_ref() {
-                info.set_item("context", ctx_obj.inner.bind(py))?;
-            } else {
-                info.set_item("context", py.None())?;
-            }
-            if let Some(root_obj) = root_value.as_ref() {
-                info.set_item("root", root_obj.inner.bind(py))?;
-            } else {
-                info.set_item("root", py.None())?;
-            }
-            let parent_obj = match parent.as_ref() {
-                Some(parent) => parent.inner.clone_ref(py),
-                None => py.None(),
-            };
-            let args = PyTuple::new(py, [parent_obj, info.into_any().unbind()])?;
-            let result = resolver.inner.call(py, args, Some(&kwargs))?;
-            let is_awaitable = result.bind(py).hasattr("__await__")?;
-            Ok((is_awaitable, result))
-        });
-
-        let (is_awaitable, result) = match result {
-            Ok(value) => value,
-            Err(err) => return Err(py_err_to_error(err, debug)),
-        };
-
-        if is_awaitable {
-            let awaited = Python::with_gil(|py| {
-                pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-            })
-            .map_err(|err| py_err_to_error(err, debug))?
-            .await
-            .map_err(|err| py_err_to_error(err, debug))?;
-            Python::with_gil(|py| {
-                py_to_field_value_for_type(
-                    py,
-                    &awaited.bind(py),
-                    &output_type,
-                    &scalar_bindings,
-                    &abstract_types,
-                )
-            })
-            .map_err(|err| py_err_to_error(err, debug))
-            .map(Some)
-        } else {
-            Python::with_gil(|py| {
-                py_to_field_value_for_type(
-                    py,
-                    &result.bind(py),
-                    &output_type,
-                    &scalar_bindings,
-                    &abstract_types,
-                )
-            })
-            .map_err(|err| py_err_to_error(err, debug))
-            .map(Some)
-        }
-    } else {
-        let parent = parent.ok_or_else(|| Error::new("No parent value for field"))?;
-        let result = Python::with_gil(|py| -> PyResult<(bool, Py<PyAny>)> {
-            let parent_ref = parent.inner.bind(py);
-            let value = if let Ok(dict) = parent_ref.downcast::<PyDict>() {
-                match dict.get_item(source_name.as_str())? {
-                    Some(item) => item.unbind(),
-                    None => py.None(),
-                }
-            } else if parent_ref.hasattr(source_name.as_str())? {
-                parent_ref.getattr(source_name.as_str())?.unbind()
-            } else if parent_ref.hasattr("__getitem__")? {
-                parent_ref.get_item(source_name.as_str())?.unbind()
-            } else {
-                py.None()
-            };
-            let is_awaitable = value.bind(py).hasattr("__await__")?;
-            Ok((is_awaitable, value))
-        });
-
-        let (is_awaitable, value) = match result {
-            Ok(value) => value,
-            Err(err) => return Err(py_err_to_error(err, debug)),
-        };
-
-        if is_awaitable {
-            let awaited = Python::with_gil(|py| {
-                pyo3_async_runtimes::tokio::into_future(value.into_bound(py))
-            })
-            .map_err(|err| py_err_to_error(err, debug))?
-            .await
-            .map_err(|err| py_err_to_error(err, debug))?;
-            Python::with_gil(|py| {
-                py_to_field_value_for_type(
-                    py,
-                    &awaited.bind(py),
-                    &output_type,
-                    &scalar_bindings,
-                    &abstract_types,
-                )
-            })
-            .map_err(|err| py_err_to_error(err, debug))
-            .map(Some)
-        } else {
-            Python::with_gil(|py| {
-                py_to_field_value_for_type(
-                    py,
-                    &value.bind(py),
-                    &output_type,
-                    &scalar_bindings,
-                    &abstract_types,
-                )
-            })
-            .map_err(|err| py_err_to_error(err, debug))
-            .map(Some)
-        }
+    fn with_py<F, R>(f: F) -> R
+    where
+        F: for<'py> FnOnce(Python<'py>) -> R,
+    {
+        Python::initialize();
+        Python::attach(f)
     }
-}
 
-async fn resolve_subscription_field<'a>(
-    ctx: ResolverContext<'a>,
-    resolver: Option<PyObj>,
-    arg_names: Arc<Vec<String>>,
-    field_name: Arc<String>,
-    source_name: Arc<String>,
-    scalar_bindings: Arc<Vec<ScalarBinding>>,
-    output_type: TypeRef,
-    abstract_types: Arc<HashSet<String>>,
-    debug: bool,
-) -> Result<BoxStream<'a, Result<FieldValue<'a>, Error>>, Error> {
-    let root_value = ctx.data::<RootValue>().ok().map(|root| root.0.clone());
-    let parent = ctx
-        .parent_value
-        .try_downcast_ref::<PyObj>()
-        .ok()
-        .cloned()
-        .or_else(|| root_value.clone());
-    let context = ctx
-        .data::<ContextValue>()
-        .ok()
-        .map(|ctx| ctx.0.clone());
-
-    let result = if let Some(resolver) = resolver {
-        let result = Python::with_gil(|py| -> PyResult<(bool, Py<PyAny>)> {
-            let kwargs = build_kwargs(py, &ctx, &arg_names)?;
-            let info = PyDict::new(py);
-            info.set_item("field_name", field_name.as_str())?;
-            if let Some(ctx_obj) = context.as_ref() {
-                info.set_item("context", ctx_obj.inner.bind(py))?;
-            } else {
-                info.set_item("context", py.None())?;
-            }
-            if let Some(root_obj) = root_value.as_ref() {
-                info.set_item("root", root_obj.inner.bind(py))?;
-            } else {
-                info.set_item("root", py.None())?;
-            }
-            let parent_obj = match parent.as_ref() {
-                Some(parent) => parent.inner.clone_ref(py),
-                None => py.None(),
-            };
-            let args = PyTuple::new(py, [parent_obj, info.into_any().unbind()])?;
-            let result = resolver.inner.call(py, args, Some(&kwargs))?;
-            let is_awaitable = result.bind(py).hasattr("__await__")?;
-            Ok((is_awaitable, result))
-        });
-
-        let (is_awaitable, result) = match result {
-            Ok(value) => value,
-            Err(err) => return Err(py_err_to_error(err, debug)),
+    #[test]
+    fn build_schema_builds_object_and_subscription_fields() {
+        let schema_def = SchemaDef {
+            query: "Query".to_string(),
+            mutation: None,
+            subscription: Some("Subscription".to_string()),
         };
-
-        if is_awaitable {
-            let awaited = Python::with_gil(|py| {
-                pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-            })
-            .map_err(|err| py_err_to_error(err, debug))?
-            .await
-            .map_err(|err| py_err_to_error(err, debug))?;
-            awaited
-        } else {
-            result
-        }
-    } else {
-        let parent = parent.ok_or_else(|| Error::new("No parent value for field"))?;
-        let result = Python::with_gil(|py| -> PyResult<(bool, Py<PyAny>)> {
-            let parent_ref = parent.inner.bind(py);
-            let value = if let Ok(dict) = parent_ref.downcast::<PyDict>() {
-                match dict.get_item(source_name.as_str())? {
-                    Some(item) => item.unbind(),
-                    None => py.None(),
-                }
-            } else if parent_ref.hasattr(source_name.as_str())? {
-                parent_ref.getattr(source_name.as_str())?.unbind()
-            } else if parent_ref.hasattr("__getitem__")? {
-                parent_ref.get_item(source_name.as_str())?.unbind()
-            } else {
-                py.None()
-            };
-            let is_awaitable = value.bind(py).hasattr("__await__")?;
-            Ok((is_awaitable, value))
-        });
-
-        let (is_awaitable, value) = match result {
-            Ok(value) => value,
-            Err(err) => return Err(py_err_to_error(err, debug)),
+        let id_field = FieldDef {
+            name: "id".to_string(),
+            source: "id".to_string(),
+            type_name: "ID!".to_string(),
+            args: Vec::new(),
+            resolver: None,
+            description: None,
+            deprecation: None,
+            default_value: None,
         };
+        let object_field = FieldDef {
+            name: "value".to_string(),
+            source: "value".to_string(),
+            type_name: "Int".to_string(),
+            args: Vec::new(),
+            resolver: None,
+            description: None,
+            deprecation: None,
+            default_value: None,
+        };
+        let subscription_field = FieldDef {
+            name: "tick".to_string(),
+            source: "tick".to_string(),
+            type_name: "Int".to_string(),
+            args: Vec::new(),
+            resolver: None,
+            description: None,
+            deprecation: None,
+            default_value: None,
+        };
+        let base_field = FieldDef {
+            name: "id".to_string(),
+            source: "id".to_string(),
+            type_name: "ID!".to_string(),
+            args: Vec::new(),
+            resolver: None,
+            description: None,
+            deprecation: None,
+            default_value: None,
+        };
+        let node_field = FieldDef {
+            name: "id".to_string(),
+            source: "id".to_string(),
+            type_name: "ID!".to_string(),
+            args: Vec::new(),
+            resolver: None,
+            description: None,
+            deprecation: None,
+            default_value: None,
+        };
+        let type_defs = vec![
+            TypeDef {
+                kind: "interface".to_string(),
+                name: "Base".to_string(),
+                fields: vec![base_field],
+                description: None,
+                implements: Vec::new(),
+            },
+            TypeDef {
+                kind: "interface".to_string(),
+                name: "Node".to_string(),
+                fields: vec![node_field],
+                description: None,
+                implements: vec!["Base".to_string()],
+            },
+            TypeDef {
+                kind: "object".to_string(),
+                name: "Query".to_string(),
+                fields: vec![id_field, object_field],
+                description: None,
+                implements: vec!["Node".to_string()],
+            },
+            TypeDef {
+                kind: "subscription".to_string(),
+                name: "Subscription".to_string(),
+                fields: vec![subscription_field],
+                description: None,
+                implements: Vec::new(),
+            },
+        ];
+        let schema = build_schema(
+            schema_def,
+            type_defs,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            HashMap::new(),
+            Arc::new(Vec::new()),
+        )
+        .unwrap();
+        let sdl = schema.sdl();
+        assert!(sdl.contains("type Query"));
+        assert!(sdl.contains("type Subscription"));
+    }
 
-        if is_awaitable {
-            let awaited = Python::with_gil(|py| {
-                pyo3_async_runtimes::tokio::into_future(value.into_bound(py))
-            })
-            .map_err(|err| py_err_to_error(err, debug))?
-            .await
-            .map_err(|err| py_err_to_error(err, debug))?;
-            awaited
-        } else {
-            value
-        }
-    };
-
-    let iterator = Python::with_gil(|py| -> PyResult<PyObj> {
-        let value_ref = result.bind(py);
-        if value_ref.hasattr("__aiter__")? {
-            let iter = value_ref.call_method0("__aiter__")?;
-            Ok(PyObj {
-                inner: iter.unbind(),
-            })
-        } else if value_ref.hasattr("__anext__")? {
-            Ok(PyObj {
-                inner: result.clone_ref(py),
-            })
-        } else {
-            Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                "Subscription resolver must return an async iterator",
-            ))
-        }
-    })
-    .map_err(|err| py_err_to_error(err, debug))?;
-
-    let scalar_bindings = scalar_bindings.clone();
-    let output_type = output_type.clone();
-    let abstract_types = abstract_types.clone();
-    let stream = stream::unfold(Some(iterator), move |state| {
-        let scalar_bindings = scalar_bindings.clone();
-        let output_type = output_type.clone();
-        let abstract_types = abstract_types.clone();
-        async move {
-            let iterator = match state {
-                Some(iterator) => iterator,
-                None => return None,
+    #[test]
+    fn build_interface_field_applies_default() {
+        with_py(|py| {
+            let arg_def = ArgDef {
+                name: "count".to_string(),
+                type_name: "Int".to_string(),
+                default_value: Some(PyObj::new(PyInt::new(py, 3).into_any().unbind())),
             };
-
-            let awaitable = Python::with_gil(|py| -> PyResult<Py<PyAny>> {
-                let awaitable = iterator.inner.bind(py).call_method0("__anext__")?;
-                Ok(awaitable.unbind())
-            });
-            let awaitable = match awaitable {
-                Ok(value) => value,
-                Err(err) => return Some((Err(py_err_to_error(err, debug)), None)),
+            let field_def = FieldDef {
+                name: "id".to_string(),
+                source: "id".to_string(),
+                type_name: "ID!".to_string(),
+                args: vec![arg_def],
+                resolver: None,
+                description: None,
+                deprecation: None,
+                default_value: None,
             };
+            let field = build_interface_field(field_def, Arc::new(Vec::new())).unwrap();
+            let _ = field;
+        });
+    }
 
-            let awaited = Python::with_gil(|py| {
-                pyo3_async_runtimes::tokio::into_future(awaitable.into_bound(py))
-            });
-            let awaited = match awaited {
-                Ok(fut) => fut.await,
-                Err(err) => return Some((Err(py_err_to_error(err, debug)), None)),
+    #[test]
+    fn build_input_field_applies_default() {
+        with_py(|py| {
+            let field_def = FieldDef {
+                name: "count".to_string(),
+                source: "count".to_string(),
+                type_name: "Int".to_string(),
+                args: Vec::new(),
+                resolver: None,
+                description: None,
+                deprecation: None,
+                default_value: Some(PyObj::new(PyInt::new(py, 7).into_any().unbind())),
             };
-
-            let next_value = match awaited {
-                Ok(value) => value,
-                Err(err) => {
-                    let is_stop =
-                        Python::with_gil(|py| err.is_instance_of::<PyStopAsyncIteration>(py));
-                    if is_stop {
-                        return None;
-                    }
-                    return Some((Err(py_err_to_error(err, debug)), None));
-                }
-            };
-
-            let value = match Python::with_gil(|py| {
-                py_to_field_value_for_type(
-                    py,
-                    &next_value.bind(py),
-                    &output_type,
-                    &scalar_bindings,
-                    &abstract_types,
-                )
-            }) {
-                Ok(value) => value,
-                Err(err) => return Some((Err(py_err_to_error(err, debug)), None)),
-            };
-            let value: FieldValue<'a> = value;
-
-            Some((Ok(value), Some(iterator)))
-        }
-    });
-
-    let stream: BoxStream<'a, Result<FieldValue<'a>, Error>> = stream.boxed();
-    Ok(stream)
+            let input = build_input_field(field_def, Arc::new(Vec::new())).unwrap();
+            let _ = input;
+        });
+    }
 }

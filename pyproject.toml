@@ -11,9 +11,9 @@ dev = [
     "pytest",
     "pytest-anyio",
     "pytest-cov",
-    "pre-commit",
     "mypy",
     "ruff",
+    "maturin"
 ]
 perf = [
     "strawberry-graphql",
@@ -21,7 +21,7 @@ perf = [
 
 [tool.pytest.ini_options]
 addopts = '-ra -vv --cov=grommet'
-testpaths = ["tests"]
+testpaths = ["tests/python"]
 
 [tool.coverage.run]
 branch = true
@@ -43,6 +43,7 @@ extend-select = ["B", "I", "ASYNC"]
 bindings = "pyo3"
 module-name = "grommet._core"
 python-source = "."
+features = ["extension-module"]
 
 [build-system]
 requires = ["maturin>=1.7"]

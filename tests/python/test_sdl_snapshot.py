@@ -75,7 +75,7 @@ class Query:
 
 
 def test_schema_sdl_snapshot() -> None:
-    schema = gm.Schema(query=Query, types=[User, Book], scalars=[Date])
+    schema = gm.Schema(query=Query)
     sdl = schema.sdl().strip()
 
     snapshot = Path(__file__).parent / "fixtures" / "schema_snapshot.graphql"

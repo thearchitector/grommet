@@ -62,7 +62,7 @@ class StrictQuery:
 
 @pytest.mark.anyio
 async def test_custom_scalar_parse_and_serialize() -> None:
-    schema = gm.Schema(query=Query, scalars=[Date])
+    schema = gm.Schema(query=Query)
     result = await schema.execute(
         "query ($when: Date!) { echo(when: $when) }",
         variables={"when": "2026-01-30"},
@@ -73,7 +73,7 @@ async def test_custom_scalar_parse_and_serialize() -> None:
 
 @pytest.mark.anyio
 async def test_custom_scalar_serializes_python_value() -> None:
-    schema = gm.Schema(query=Query, scalars=[Date])
+    schema = gm.Schema(query=Query)
     result = await schema.execute(
         "query ($when: Date!) { echo(when: $when) }",
         variables={"when": Date("2026-01-30")},
@@ -84,7 +84,7 @@ async def test_custom_scalar_serializes_python_value() -> None:
 
 @pytest.mark.anyio
 async def test_custom_scalar_invalid_input_reports_error() -> None:
-    schema = gm.Schema(query=StrictQuery, scalars=[StrictInt])
+    schema = gm.Schema(query=StrictQuery)
     result = await schema.execute(
         "query ($value: StrictInt!) { accept(value: $value) }",
         variables={"value": "nope"},

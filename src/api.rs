@@ -10,9 +10,10 @@ use pyo3::types::PyDict;
 use tokio::sync::Mutex;
 
 use crate::build::build_schema;
+use crate::errors::runtime_threads_conflict;
 use crate::parse::{parse_resolvers, parse_scalar_bindings, parse_schema_definition};
 use crate::types::{ContextValue, PyObj, RootValue, ScalarBinding};
-use crate::values::{py_to_value, response_to_py};
+use crate::values::{py_to_const_value, response_to_py};
 
 #[pyclass(module = "grommet._core", name = "Schema")]
 pub(crate) struct SchemaWrapper {
@@ -23,13 +24,12 @@ pub(crate) struct SchemaWrapper {
 #[pymethods]
 impl SchemaWrapper {
     #[new]
-    #[pyo3(signature = (definition, resolvers=None, scalars=None, debug=false))]
+    #[pyo3(signature = (definition, resolvers=None, scalars=None))]
     fn new(
         py: Python,
         definition: &Bound<'_, PyAny>,
         resolvers: Option<&Bound<'_, PyDict>>,
         scalars: Option<&Bound<'_, PyAny>>,
-        debug: bool,
     ) -> PyResult<Self> {
         let (schema_def, type_defs, scalar_defs, enum_defs, union_defs) =
             parse_schema_definition(py, definition)?;
@@ -43,7 +43,6 @@ impl SchemaWrapper {
             union_defs,
             resolver_map,
             scalar_bindings.clone(),
-            debug,
         )?;
         Ok(SchemaWrapper {
             schema: Arc::new(schema),
@@ -64,25 +63,22 @@ impl SchemaWrapper {
         context: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let vars_value = if let Some(vars) = variables {
-            let value = Python::with_gil(|py| {
+            let value = Python::attach(|py| {
                 let bound = vars.bind(py);
-                py_to_value(py, &bound, self.scalars.as_ref(), true)
+                py_to_const_value(py, &bound, self.scalars.as_ref())
             })?;
             Some(value)
         } else {
             None
         };
-        let root_value = root.map(|obj| RootValue(PyObj { inner: obj }));
-        let context_value = context.map(|obj| ContextValue(PyObj { inner: obj }));
+        let root_value = root.map(|obj| RootValue(PyObj::new(obj)));
+        let context_value = context.map(|obj| ContextValue(PyObj::new(obj)));
         let schema = self.schema.clone();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut request = Request::new(query);
             if let Some(vars) = vars_value {
-                let json = serde_json::to_value(vars).map_err(|err| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(err.to_string())
-                })?;
-                request = request.variables(Variables::from_json(json));
+                request = request.variables(Variables::from_value(vars));
             }
             if let Some(root) = root_value {
                 request = request.data(root);
@@ -91,7 +87,7 @@ impl SchemaWrapper {
                 request = request.data(ctx);
             }
             let response = schema.execute(request).await;
-            Python::with_gil(|py| response_to_py(py, response))
+            Python::attach(|py| response_to_py(py, response))
         })
     }
 
@@ -104,23 +100,20 @@ impl SchemaWrapper {
         context: Option<Py<PyAny>>,
     ) -> PyResult<SubscriptionStream> {
         let vars_value = if let Some(vars) = variables {
-            let value = Python::with_gil(|py| {
+            let value = Python::attach(|py| {
                 let bound = vars.bind(py);
-                py_to_value(py, &bound, self.scalars.as_ref(), true)
+                py_to_const_value(py, &bound, self.scalars.as_ref())
             })?;
             Some(value)
         } else {
             None
         };
-        let root_value = root.map(|obj| RootValue(PyObj { inner: obj }));
-        let context_value = context.map(|obj| ContextValue(PyObj { inner: obj }));
+        let root_value = root.map(|obj| RootValue(PyObj::new(obj)));
+        let context_value = context.map(|obj| ContextValue(PyObj::new(obj)));
 
         let mut request = Request::new(query);
         if let Some(vars) = vars_value {
-            let json = serde_json::to_value(vars).map_err(|err| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(err.to_string())
-            })?;
-            request = request.variables(Variables::from_json(json));
+            request = request.variables(Variables::from_value(vars));
         }
         if let Some(root) = root_value {
             request = request.data(root);
@@ -164,7 +157,7 @@ impl SubscriptionStream {
                 return Err(PyErr::new::<PyStopAsyncIteration, _>(""));
             };
             match stream.next().await {
-                Some(response) => Python::with_gil(|py| response_to_py(py, response)),
+                Some(response) => Python::attach(|py| response_to_py(py, response)),
                 None => Err(PyErr::new::<PyStopAsyncIteration, _>("")),
             }
         })?;
@@ -178,7 +171,7 @@ impl SubscriptionStream {
             closed.store(true, Ordering::SeqCst);
             let mut guard = stream.lock().await;
             *guard = None;
-            Ok(Python::with_gil(|py| py.None()))
+            Ok(Python::attach(|py| py.None()))
         })
     }
 }
@@ -190,9 +183,7 @@ pub(crate) fn configure_runtime(
     worker_threads: Option<usize>,
 ) -> PyResult<bool> {
     if use_current_thread && worker_threads.is_some() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "worker_threads cannot be set for a current-thread runtime",
-        ));
+        return Err(runtime_threads_conflict());
     }
     let mut builder = if use_current_thread {
         tokio::runtime::Builder::new_current_thread()

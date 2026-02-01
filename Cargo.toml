@@ -3,14 +3,24 @@ name = "grommet"
 version = "0.1.0"
 edition = "2021"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
+
 [lib]
 name = "grommet"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[[test]]
+name = "rust"
+path = "tests/rust/test_rust.rs"
 
 [dependencies]
 async-graphql = "7.2.1"
 indexmap = "2"
-pyo3 = { version = "0.27.2", default-features = false, features = ["macros", "extension-module", "experimental-inspect"] }
+pyo3 = { version = "0.27.2", default-features = false, features = ["macros", "experimental-inspect"] }
 pyo3-async-runtimes = { version = "0.27.0", features = ["tokio-runtime"] }
-serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }

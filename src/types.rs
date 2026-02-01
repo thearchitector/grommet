@@ -1,32 +1,42 @@
+use std::sync::{Arc, Mutex};
+
 use pyo3::prelude::*;
 
-// shared rust wrappers for python-owned values
+// shared rust wrappers for python-owned values; Arc<Mutex<_>> keeps Send+Sync without unsafe
+#[derive(Clone)]
 pub(crate) struct PyObj {
-    pub(crate) inner: Py<PyAny>,
+    inner: Arc<Mutex<Py<PyAny>>>,
 }
 
-impl Clone for PyObj {
-    fn clone(&self) -> Self {
-        Python::with_gil(|py| Self {
-            inner: self.inner.clone_ref(py),
-        })
+impl PyObj {
+    pub(crate) fn new(inner: Py<PyAny>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
+        }
+    }
+
+    pub(crate) fn bind<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny> {
+        let guard = self
+            .inner
+            .lock()
+            .expect("PyObj mutex poisoned while binding");
+        guard.clone_ref(py).into_bound(py)
+    }
+
+    pub(crate) fn clone_ref(&self, py: Python<'_>) -> Py<PyAny> {
+        let guard = self
+            .inner
+            .lock()
+            .expect("PyObj mutex poisoned while cloning");
+        guard.clone_ref(py)
     }
 }
-
-unsafe impl Send for PyObj {}
-unsafe impl Sync for PyObj {}
 
 #[derive(Clone)]
 pub(crate) struct RootValue(pub(crate) PyObj);
 
-unsafe impl Send for RootValue {}
-unsafe impl Sync for RootValue {}
-
 #[derive(Clone)]
 pub(crate) struct ContextValue(pub(crate) PyObj);
-
-unsafe impl Send for ContextValue {}
-unsafe impl Sync for ContextValue {}
 
 pub(crate) struct SchemaDef {
     pub(crate) query: String,

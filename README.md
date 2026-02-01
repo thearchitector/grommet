@@ -1,6 +1,8 @@
 # grommet
 
-Dataclass-first GraphQL schema definitions in Python, executed by async-graphql in Rust via PyO3.
+High performance Python GraphQL library inspired by [Strawberry](https://strawberry.rocks/) but backed by [async-graphql](https://async-graphql.github.io/async-graphql/en/index.html).
+
+This is an experiment in a nearly 100% AI-written library. I provided guidelines and design guidance through review of the generated code and curated revision plans.
 
 ## Example
 
@@ -65,7 +67,7 @@ class Query:
     async def today(parent, info) -> Date:
         return Date("2026-01-30")
 
-schema = gm.Schema(query=Query, scalars=[Date])
+schema = gm.Schema(query=Query)
 ```
 
 ## Schema Overview
@@ -99,7 +101,6 @@ async def get_user(parent, info, user: UserInput) -> User:
 - Input types must be marked with `@gm.input`.
 - Use `Schema.sdl()` to inspect the generated schema.
 - Resolver params may include `parent`, `info` (`gm.Info`), `context`, and `root`.
-- Use `Schema(debug=True)` to include Python tracebacks in error extensions.
 - Fields prefixed with `_`, annotated as `ClassVar`, or wrapped in `gm.Internal[...]`/`gm.Private[...]` are excluded from the schema.
 
 ## Runtime Configuration

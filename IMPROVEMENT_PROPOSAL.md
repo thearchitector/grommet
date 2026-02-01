@@ -2,7 +2,7 @@
 
 This document captures a set of proposed changes to tighten the public API, simplify runtime behavior, and improve typing ergonomics. Each section is a self-contained item with rationale, scope, and implementation notes.
 
-## 1) Require explicit dataclasses
+## 1) Require explicit dataclasses [x]
 
 ### Rationale
 Decorators currently auto-apply `@dataclass` to non-dataclass classes. This hides implicit behavior and can surprise users (e.g., field defaults, init signature, repr).
@@ -19,7 +19,7 @@ Decorators currently auto-apply `@dataclass` to non-dataclass classes. This hide
 - More explicit and predictable class behavior.
 - Slightly stricter API but clearer for users and type checkers.
 
-## 2) Remove `types` and `scalars` parameters from `Schema`
+## 2) Remove `types` and `scalars` parameters from `Schema` [x]
 
 ### Rationale
 `Schema(types=..., scalars=...)` adds a second path for registering types. Automatic discovery already walks the type graph from entrypoints and resolver annotations, so the extra parameters are redundant and add complexity.
@@ -37,7 +37,7 @@ Decorators currently auto-apply `@dataclass` to non-dataclass classes. This hide
 - Simpler API and fewer edge cases.
 - Slightly stricter usage: users must reference all types in the graph rather than pass explicit lists.
 
-## 3) Remove support for `debug`
+## 3) Remove support for `debug` [x]
 
 ### Rationale
 `Schema(debug=True)` toggles Python tracebacks in GraphQL error extensions. This adds a mode that’s hard to reason about across environments and can leak sensitive data in production.
@@ -54,7 +54,7 @@ Decorators currently auto-apply `@dataclass` to non-dataclass classes. This hide
 - Simpler API surface.
 - Reduced risk of accidental sensitive error leakage.
 
-## 4) Add docstrings to everything exposed in `grommet.__init__`
+## 4) Add docstrings to everything exposed in `grommet.__init__` [x]
 
 ### Rationale
 Public API objects should be self-documenting. This also improves IDE hover help and aligns with the project’s docstring guidance.
@@ -72,7 +72,7 @@ Add concise docstrings for the following public exports:
 ### Impact
 - Better developer experience and discoverability.
 
-## 5) Improve decorator typing for `__grommet_meta__`
+## 5) Improve decorator typing for `__grommet_meta__` [x]
 
 ### Rationale
 Static typing doesn’t currently “know” that decorated classes carry grommet metadata. We can make this explicit for type checkers without changing runtime semantics.
@@ -89,7 +89,7 @@ Static typing doesn’t currently “know” that decorated classes carry gromme
 - Better static typing and fewer casts in downstream code.
 - No behavioral change at runtime.
 
-## 6) Centralize annotation normalization and coercion (Python)
+## 6) Centralize annotation normalization and coercion (Python) [x]
 
 ### Rationale
 Annotation handling is spread across multiple helpers (`_unwrap_annotated`, `_split_optional`, `_unwrap_async_iterable`, `_iter_*_refs`, `_type_spec_from_annotation`, `_coerce_value`). This makes behavior hard to audit and evolve.
@@ -107,7 +107,7 @@ Annotation handling is spread across multiple helpers (`_unwrap_annotated`, `_sp
 - Fewer edge-case mismatches between coercion and schema generation.
 - Easier to reason about nullability and container semantics.
 
-## 7) Consolidate schema graph traversal (Python)
+## 7) Consolidate schema graph traversal (Python) [x]
 
 ### Rationale
 `_collect_types`, `_collect_scalars`, `_collect_enums`, and `_collect_unions` duplicate traversal logic with only small variations. This increases maintenance overhead and makes it easier to introduce inconsistencies when adding new type kinds.
@@ -124,7 +124,7 @@ Annotation handling is spread across multiple helpers (`_unwrap_annotated`, `_sp
 - Less duplicated logic and fewer subtle divergences.
 - Easier to add new kinds (e.g., directives or future type categories).
 
-## 8) Split `schema.py` into focused modules
+## 8) Split `schema.py` into focused modules [x]
 
 ### Rationale
 `schema.py` is the largest Python file and mixes collection, schema assembly, coercion, and resolver wrapping. This makes navigation and edits harder.
@@ -145,7 +145,7 @@ Annotation handling is spread across multiple helpers (`_unwrap_annotated`, `_sp
 - Smaller, more focused files.
 - Easier targeted changes without cross-cutting edits.
 
-## 9) Standardize error types and messaging
+## 9) Standardize error types and messaging [x]
 
 ### Rationale
 Errors are currently created in multiple places with ad hoc strings. This makes behavior inconsistent and harder to test and document.
@@ -162,7 +162,7 @@ Errors are currently created in multiple places with ad hoc strings. This makes 
 - Predictable error messages for users.
 - Easier to add tests for error cases and maintain behavior over time.
 
-## 10) Rust safety policy: forbid unsafe code
+## 10) Rust safety policy: forbid unsafe code [x]
 
 ### Rationale
 The current Rust code uses `unsafe` (notably `Send`/`Sync` impls for Python objects). This makes the concurrency model harder to audit and reason about. Enforcing `#![forbid(unsafe_code)]` creates a clear maintenance contract and reduces long-term risk. The async-graphql crate itself uses `#![forbid(unsafe_code)]`, so aligning with that policy is consistent with upstream practice. citeturn1search7
@@ -183,7 +183,7 @@ The current Rust code uses `unsafe` (notably `Send`/`Sync` impls for Python obje
 - Stronger safety guarantees and easier auditing.
 - Potential refactors to avoid `Send` requirements in the Rust/PyO3 bridge.
 
-## 11) Rust resolver pipeline refactor
+## 11) Rust resolver pipeline refactor [x]
 
 ### Rationale
 `build.rs` contains long, repeated resolver logic paths (field vs subscription) with similar GIL/await/error handling. This raises risk of inconsistencies and makes refactors expensive.
@@ -205,7 +205,7 @@ The current Rust code uses `unsafe` (notably `Send`/`Sync` impls for Python obje
 - Less duplication between field and subscription resolution.
 - Clearer control flow and safer future edits.
 
-## 12) Direct async-graphql interop (no JSON round-trip)
+## 12) Direct async-graphql interop (no JSON round-trip) [x]
 
 ### Rationale
 We currently serialize Python values to JSON and then feed async-graphql `Variables::from_json`, and likewise serialize error extensions to JSON before converting to Python. This adds overhead and loses some type fidelity.
