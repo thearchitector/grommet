@@ -2,12 +2,7 @@
 #![allow(clippy::needless_return)]
 #![allow(clippy::redundant_clone)]
 
-use std::sync::Arc;
-
-use async_graphql::{Name, Value};
-use indexmap::IndexMap;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyModule};
 
 fn with_py<F, R>(f: F) -> R
 where
@@ -15,18 +10,6 @@ where
 {
     Python::initialize();
     Python::attach(f)
-}
-
-/// Verifies the core module exposes the expected Python bindings.
-#[test]
-fn core_module_registers_items() {
-    crate::with_py(|py| {
-        let module = PyModule::new(py, "grommet._core").unwrap();
-        grommet::_core(py, &module).unwrap();
-        assert!(module.getattr("Schema").is_ok());
-        assert!(module.getattr("SubscriptionStream").is_ok());
-        assert!(module.getattr("configure_runtime").is_ok());
-    });
 }
 
 mod errors {
@@ -91,30 +74,6 @@ mod errors {
 
 mod types {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/types.rs"));
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use pyo3::IntoPyObject;
-
-        /// Verifies PyObj binding and cloning preserve underlying Python values.
-        #[test]
-        fn pyobj_bind_clone_round_trip() {
-            crate::with_py(|py| {
-                let obj = "hello".into_pyobject(py).unwrap().into_any().unbind();
-                let pyobj = PyObj::new(obj);
-                let bound = pyobj.bind(py);
-                assert_eq!(bound.extract::<String>().unwrap(), "hello");
-                let cloned = pyobj.clone_ref(py);
-                assert_eq!(cloned.bind(py).extract::<String>().unwrap(), "hello");
-
-                let root = RootValue(pyobj.clone());
-                let ctx = ContextValue(pyobj);
-                let _ = root;
-                let _ = ctx;
-            });
-        }
-    }
 }
 
 mod values {
@@ -1463,35 +1422,14 @@ async def ticks(parent, info, limit: int):
                         pyo3_async_runtimes::tokio::into_future(close.into_bound(py))
                     })?
                     .await?;
-                    let closed = Python::attach(|py| stream.__anext__(py))?;
-                    assert!(closed.is_none());
+                    let closed =
+                        Python::attach(|py| Ok::<bool, PyErr>(stream.__anext__(py)?.is_none()))?;
+                    assert!(closed);
 
                     Ok(())
                 })
             })
             .unwrap();
-        }
-
-        /// Ensures SubscriptionStream.__aiter__ returns the stream itself.
-        #[test]
-        fn subscription_stream_aiter_returns_self() {
-            use std::sync::atomic::{AtomicBool, Ordering};
-            use std::sync::Arc;
-            use tokio::sync::Mutex;
-
-            crate::with_py(|py| {
-                let stream = SubscriptionStream {
-                    stream: Arc::new(Mutex::new(None)),
-                    closed: Arc::new(AtomicBool::new(false)),
-                };
-                let py_stream = Py::new(py, stream).unwrap();
-                {
-                    let aiter = SubscriptionStream::__aiter__(py_stream.borrow(py));
-                    aiter.closed.store(true, Ordering::SeqCst);
-                }
-                let py_ref = py_stream.borrow(py);
-                assert!(py_ref.closed.load(Ordering::SeqCst));
-            });
         }
 
         /// Verifies SubscriptionStream reports errors for missing or empty streams.

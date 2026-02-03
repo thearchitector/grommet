@@ -4,6 +4,7 @@
 
 - The user will use language and key words like ALWAYS, NEVER, SHOULD, alongside their negatives, to indicate the strictness with which to follow instructions. These correspond to RFC-2119 definitions. It is CRITICAL to adhere to these key words, and similar imperative language, when executing a task.
 - When the user asks you to complete a task, ALWAYS execute the task to completion. You should NEVER ask the user whether or not to proceed when continuing a task or following a plan.
+- If the user asks you to generate a plan, generate a new markdown file in the `ai_plans` directory, prefixing it with the next sequential plan number.
 
 ## Development Guidelines
 - Mirror the established architecture, type hints, and docstring style referenced in the pattern guides.
