@@ -34,6 +34,9 @@ class SdlQuery:
 
 @pytest.mark.anyio
 async def test_schema_sdl_contains_types() -> None:
+    """
+    Verifies generated SDL includes referenced types and omits unused ones.
+    """
     schema = gm.Schema(query=SdlQuery)
     sdl = schema.sdl()
 

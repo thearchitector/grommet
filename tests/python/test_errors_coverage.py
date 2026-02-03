@@ -1,11 +1,7 @@
 import pytest
 
 from grommet import errors
-from grommet.errors import (
-    GrommetSchemaError,
-    GrommetTypeError,
-    GrommetValueError,
-)
+from grommet.errors import GrommetSchemaError, GrommetTypeError, GrommetValueError
 
 
 @pytest.mark.parametrize(
@@ -143,12 +139,7 @@ from grommet.errors import (
             GrommetTypeError,
             "@grommet.enum requires an enum.Enum subclass.",
         ),
-        (
-            errors.union_requires_name,
-            (),
-            GrommetTypeError,
-            "union() requires a name.",
-        ),
+        (errors.union_requires_name, (), GrommetTypeError, "union() requires a name."),
         (
             errors.union_requires_types,
             (),
@@ -176,6 +167,9 @@ from grommet.errors import (
     ],
 )
 def test_error_factories(factory, args, exc_type, message) -> None:
+    """
+    Verifies error factory helpers return expected exception types and messages.
+    """
     err = factory(*args)
     assert isinstance(err, exc_type)
     assert str(err) == message

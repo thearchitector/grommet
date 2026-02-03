@@ -29,6 +29,9 @@ class Subscription:
 
 @pytest.mark.anyio
 async def test_subscription_streams_values() -> None:
+    """
+    Verifies subscriptions stream successive payloads from async iterators.
+    """
     schema = gm.Schema(query=Query, subscription=Subscription)
     stream = schema.subscribe(
         "subscription ($limit: Int!) { countdown(limit: $limit) }",
@@ -43,6 +46,9 @@ async def test_subscription_streams_values() -> None:
 
 @pytest.mark.anyio
 async def test_subscription_aclose_stops_iteration() -> None:
+    """
+    Ensures closing a subscription stops further iteration.
+    """
     schema = gm.Schema(query=Query, subscription=Subscription)
     stream = schema.subscribe(
         "subscription ($limit: Int!) { countdown(limit: $limit) }",
@@ -59,6 +65,9 @@ async def test_subscription_aclose_stops_iteration() -> None:
 
 @pytest.mark.anyio
 async def test_subscription_backpressure_serializes_anext() -> None:
+    """
+    Verifies subscription backpressure serializes concurrent anext calls.
+    """
     queue: asyncio.Queue[int] = asyncio.Queue()
 
     @gm.type

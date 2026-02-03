@@ -75,6 +75,9 @@ class Query:
 
 
 def test_schema_sdl_snapshot() -> None:
+    """
+    Verifies generated SDL matches the stored schema snapshot.
+    """
     schema = gm.Schema(query=Query)
     sdl = schema.sdl().strip()
 

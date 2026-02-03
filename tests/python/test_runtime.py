@@ -21,6 +21,9 @@ class Query:
 
 @pytest.mark.anyio
 async def test_configure_runtime_allows_execution() -> None:
+    """
+    Verifies runtime configuration enables schema execution.
+    """
     assert gm.configure_runtime(use_current_thread=True)
     schema = gm.Schema(query=Query)
     result = await schema.execute("{ ping }")
@@ -30,6 +33,9 @@ async def test_configure_runtime_allows_execution() -> None:
 
 @pytest.mark.anyio
 async def test_nested_event_loop_execution() -> None:
+    """
+    Ensures schema execution works within nested async scheduling.
+    """
     schema = gm.Schema(query=Query)
 
     async def run_query() -> str:

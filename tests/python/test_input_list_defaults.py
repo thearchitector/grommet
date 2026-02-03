@@ -32,6 +32,9 @@ class Query:
 
 @pytest.mark.anyio
 async def test_input_list_defaults_apply() -> None:
+    """
+    Verifies list input defaults are applied when omitted in variables.
+    """
     schema = gm.Schema(query=Query)
     result = await schema.execute(
         "query ($payload: Payload!) { total(payload: $payload) }",

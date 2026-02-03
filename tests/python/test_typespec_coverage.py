@@ -46,11 +46,17 @@ class Plain:
 
 
 def test_type_spec_list_requires_parameter() -> None:
+    """
+    Ensures list annotations require a parameterized inner type.
+    """
     with pytest.raises(GrommetTypeError):
         _type_spec_from_annotation(List, expect_input=True)
 
 
 def test_type_spec_scalar_and_enum() -> None:
+    """
+    Verifies scalar and enum annotations map to named type specs.
+    """
     scalar_spec = _type_spec_from_annotation(CustomScalar, expect_input=False)
     enum_spec = _type_spec_from_annotation(Color, expect_input=False)
     assert scalar_spec.name == "CustomScalar"
@@ -58,16 +64,25 @@ def test_type_spec_scalar_and_enum() -> None:
 
 
 def test_type_spec_union_input_not_supported() -> None:
+    """
+    Ensures union annotations are rejected when used for input types.
+    """
     with pytest.raises(GrommetTypeError):
         _type_spec_from_annotation(UnionType, expect_input=True)
 
 
 def test_type_spec_builtin_scalar_mapping() -> None:
+    """
+    Verifies builtin scalar annotations map to GraphQL scalar names.
+    """
     spec = _type_spec_from_annotation(str, expect_input=False)
     assert spec.to_graphql() == "String!"
 
 
 def test_type_spec_input_output_validation() -> None:
+    """
+    Ensures input/output annotations are validated against expected usage.
+    """
     with pytest.raises(GrommetTypeError):
         _type_spec_from_annotation(Obj, expect_input=True)
     with pytest.raises(GrommetTypeError):
@@ -75,11 +90,17 @@ def test_type_spec_input_output_validation() -> None:
 
 
 def test_type_spec_unsupported_annotation() -> None:
+    """
+    Ensures unsupported annotations raise a type error.
+    """
     with pytest.raises(GrommetTypeError):
         _type_spec_from_annotation(set, expect_input=True)
 
 
 def test_meta_getters_raise_when_missing() -> None:
+    """
+    Ensures meta getter helpers raise for undecorated types.
+    """
     with pytest.raises(GrommetTypeError):
         _get_type_meta(Plain)
     with pytest.raises(GrommetTypeError):
@@ -91,5 +112,8 @@ def test_meta_getters_raise_when_missing() -> None:
 
 
 def test_maybe_type_name_handles_none() -> None:
+    """
+    Verifies _maybe_type_name handles None and decorated types.
+    """
     assert _maybe_type_name(None) is None
     assert _maybe_type_name(Obj) == "Obj"

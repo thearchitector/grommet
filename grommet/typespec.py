@@ -28,10 +28,7 @@ if TYPE_CHECKING:
 
 
 def _type_spec_from_annotation(
-    annotation: "Any",
-    *,
-    expect_input: bool,
-    force_nullable: bool = False,
+    annotation: "Any", *, expect_input: bool, force_nullable: bool = False
 ) -> TypeSpec:
     info = analyze_annotation(annotation)
     inner = info.inner

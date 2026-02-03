@@ -4,6 +4,9 @@ import grommet as gm
 
 
 def test_type_requires_dataclass() -> None:
+    """
+    Ensures @grommet.type requires an explicit dataclass wrapper.
+    """
     with pytest.raises(TypeError, match="explicit dataclass"):
 
         @gm.type
@@ -12,6 +15,9 @@ def test_type_requires_dataclass() -> None:
 
 
 def test_input_requires_dataclass() -> None:
+    """
+    Ensures @grommet.input requires an explicit dataclass wrapper.
+    """
     with pytest.raises(TypeError, match="explicit dataclass"):
 
         @gm.input
@@ -20,6 +26,9 @@ def test_input_requires_dataclass() -> None:
 
 
 def test_interface_requires_dataclass() -> None:
+    """
+    Ensures @grommet.interface requires an explicit dataclass wrapper.
+    """
     with pytest.raises(TypeError, match="explicit dataclass"):
 
         @gm.interface

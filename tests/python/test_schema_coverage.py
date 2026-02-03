@@ -22,16 +22,25 @@ class Query:
 
 
 def test_schema_requires_query() -> None:
+    """
+    Ensures schema construction fails when the query type is missing.
+    """
     with pytest.raises(GrommetSchemaError):
         Schema(query=None)  # type: ignore[arg-type]
 
 
 def test_schema_repr() -> None:
+    """
+    Verifies schema repr output includes query configuration details.
+    """
     schema = Schema(query=Query)
     assert "Schema(query=" in repr(schema)
 
 
 def test_internal_input_fields_skipped() -> None:
+    """
+    Ensures internal input fields are excluded from schema definitions.
+    """
     traversal = _traverse_schema([Query, Payload])
     definition, _, _ = _build_schema_definition(
         query=Query,
@@ -49,6 +58,10 @@ def test_internal_input_fields_skipped() -> None:
 
 
 def test_schema_unknown_kind_raises() -> None:
+    """
+    Ensures unknown type kinds raise a schema type error.
+    """
+
     class Weird:
         pass
 
@@ -75,6 +88,9 @@ class Node:
 
 
 def test_interface_resolvers_not_registered() -> None:
+    """
+    Verifies interface resolvers are not registered in schema definitions.
+    """
     traversal = _traverse_schema([Node])
     _, resolvers, _ = _build_schema_definition(
         query=Query,

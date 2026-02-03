@@ -35,9 +35,7 @@ def _parse_strict_int(value: "Any") -> StrictInt:
 
 
 gm.scalar(
-    name="StrictInt",
-    serialize=_serialize_strict_int,
-    parse_value=_parse_strict_int,
+    name="StrictInt", serialize=_serialize_strict_int, parse_value=_parse_strict_int
 )(StrictInt)
 
 
@@ -62,10 +60,12 @@ class StrictQuery:
 
 @pytest.mark.anyio
 async def test_custom_scalar_parse_and_serialize() -> None:
+    """
+    Verifies custom scalars parse input values and serialize responses.
+    """
     schema = gm.Schema(query=Query)
     result = await schema.execute(
-        "query ($when: Date!) { echo(when: $when) }",
-        variables={"when": "2026-01-30"},
+        "query ($when: Date!) { echo(when: $when) }", variables={"when": "2026-01-30"}
     )
 
     assert result["data"]["echo"] == "2026-01-30"
@@ -73,6 +73,9 @@ async def test_custom_scalar_parse_and_serialize() -> None:
 
 @pytest.mark.anyio
 async def test_custom_scalar_serializes_python_value() -> None:
+    """
+    Verifies custom scalars serialize Python value inputs.
+    """
     schema = gm.Schema(query=Query)
     result = await schema.execute(
         "query ($when: Date!) { echo(when: $when) }",
@@ -84,6 +87,9 @@ async def test_custom_scalar_serializes_python_value() -> None:
 
 @pytest.mark.anyio
 async def test_custom_scalar_invalid_input_reports_error() -> None:
+    """
+    Ensures invalid custom scalar input values surface execution errors.
+    """
     schema = gm.Schema(query=StrictQuery)
     result = await schema.execute(
         "query ($value: StrictInt!) { accept(value: $value) }",

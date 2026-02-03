@@ -1,13 +1,16 @@
 # AGENTS.md
 
+## Prompting
+
+- The user will use language and key words like ALWAYS, NEVER, SHOULD, alongside their negatives, to indicate the strictness with which to follow instructions. These correspond to RFC-2119 definitions. It is CRITICAL to adhere to these key words, and similar imperative language, when executing a task.
+- When the user asks you to complete a task, ALWAYS execute the task to completion. You should NEVER ask the user whether or not to proceed when continuing a task or following a plan.
+
 ## Development Guidelines
-- Match existing patterns: Mirror the established architecture, type hints, and docstring style referenced in the pattern guides.
-- Document intent: Update relevant docs or TODO items when behavior shifts or tasks complete.
-- Prove with pytest: Cover modifications with pytest unit tests, and address any failures prior to finishing.
-- Run tests with uv: Use `uv run pytest -sv tests/` as the default test command unless a task explicitly requires a different invocation.
-- ALWAYS use uv run for Python: ALWAYS use `uv run` when running Python commands. Never run Python directly (e.g., python script.py). Always use `uv run python script.py` or `uv run python -c "..."`. This ensures the correct virtual environment and dependencies are used.
-- Verify linting with mypy: Use `uv run mypy .` to verify typing. Address any failures prior to finishing.
-- Lint with ruff: Use `uv run ruff check --fix --exit-non-zero-on-fix .` to lint. Address any failures prior to finishing.
+- Mirror the established architecture, type hints, and docstring style referenced in the pattern guides.
+- Update relevant docs or TODO items when behavior shifts or tasks complete.
+- ALWAYS cover modifications with new or updated unit tests, and address any failures prior to finishing.
+- ALWAYS use `uv run` for Python: Use `uv run` when running Python commands. Never run Python directly (e.g., python script.py). Always use `uv run pytest`, `uv run python script.py`, `uv run python -c "..."`, etc. This ensures the correct virtual environment and dependencies are used.
+- ALWAYS verify changes with `prek run -a`. Address any failures prior to finishing.
 
 ## Common Patterns
 
@@ -70,7 +73,7 @@ def get_user_email(payload: str) -> str:
 
 ### 3. Prefer to import specific items instead of entire modules
 
-USUALLY prefer to import specific items instead of entire modules. For example:
+You SHOULD prefer to import specific items instead of entire modules. For example:
 
 **BAD**:
 ```python

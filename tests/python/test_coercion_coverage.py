@@ -45,6 +45,9 @@ class NoDefaults:
 
 
 def test_default_value_for_annotation_list_and_input() -> None:
+    """
+    Verifies default values are derived for list and input annotations.
+    """
     with pytest.raises(GrommetTypeError):
         _default_value_for_annotation(List, [1])
     assert _default_value_for_annotation(list[int], (1, 2)) == [1, 2]
@@ -59,6 +62,9 @@ def test_default_value_for_annotation_list_and_input() -> None:
 
 
 def test_input_field_default_variants() -> None:
+    """
+    Verifies input field defaults resolve from values, factories, or missing.
+    """
     field_default = dataclasses.fields(WithDefaults)[0]
     field_factory = dataclasses.fields(WithDefaults)[1]
     field_missing = dataclasses.fields(NoDefaults)[0]
@@ -69,6 +75,9 @@ def test_input_field_default_variants() -> None:
 
 
 def test_arg_coercer_object_short_circuits() -> None:
+    """
+    Ensures argument coercion skips object and coerces concrete scalars.
+    """
     assert _arg_coercer(object) is None
     coercer = _arg_coercer(int)
     assert coercer is not None
@@ -76,6 +85,9 @@ def test_arg_coercer_object_short_circuits() -> None:
 
 
 def test_coerce_value_branches() -> None:
+    """
+    Verifies value coercion covers nulls, enums, lists, and input objects.
+    """
     assert _coerce_value(None, int) is None
     assert _coerce_value("3", int | None) == 3
     assert _coerce_value(["1", "2"], list[int]) == [1, 2]

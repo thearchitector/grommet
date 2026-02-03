@@ -48,6 +48,9 @@ class NestedQuery:
 
 @pytest.mark.anyio
 async def test_missing_required_input_field_reports_error() -> None:
+    """
+    Ensures missing required input fields yield validation errors.
+    """
     schema = gm.Schema(query=RequiredQuery)
     result = await schema.execute(
         "query ($data: RequiredInput!) { lookup(data: $data) }",
@@ -59,6 +62,9 @@ async def test_missing_required_input_field_reports_error() -> None:
 
 @pytest.mark.anyio
 async def test_missing_nested_required_input_field_reports_error() -> None:
+    """
+    Ensures missing nested required fields yield validation errors.
+    """
     schema = gm.Schema(query=NestedQuery)
     result = await schema.execute(
         "query ($payload: OuterInput!) { nested(payload: $payload) }",

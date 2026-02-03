@@ -20,6 +20,9 @@ class Query:
 
 @pytest.mark.anyio
 async def test_error_includes_path_location_and_omits_traceback() -> None:
+    """
+    Verifies GraphQL execution errors include path/location data without tracebacks.
+    """
     schema = gm.Schema(query=Query)
     result = await schema.execute("{ boom }")
 
@@ -37,6 +40,9 @@ async def test_error_includes_path_location_and_omits_traceback() -> None:
 
 @pytest.mark.anyio
 async def test_parse_error_sets_null_data() -> None:
+    """
+    Verifies parse errors return null data alongside reported errors.
+    """
     schema = gm.Schema(query=Query)
     result = await schema.execute("{")
 

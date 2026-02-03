@@ -6,6 +6,9 @@ from grommet.resolver import _normalize_info, _wrap_resolver
 
 
 def test_normalize_info_variants() -> None:
+    """
+    Verifies info normalization accepts Info, mapping, and object variants.
+    """
     info = Info(field_name="field", context="ctx", root="root")
     assert _normalize_info(info) is info
 
@@ -26,6 +29,10 @@ def test_normalize_info_variants() -> None:
 
 
 def test_wrap_resolver_missing_annotation_raises() -> None:
+    """
+    Ensures resolver wrapping fails when required annotations are missing.
+    """
+
     def resolver(parent, info, value):
         return value
 
@@ -35,6 +42,10 @@ def test_wrap_resolver_missing_annotation_raises() -> None:
 
 @pytest.mark.anyio
 async def test_wrap_resolver_info_context_root() -> None:
+    """
+    Verifies wrapped resolvers receive coerced args and info/context/root.
+    """
+
     def resolver(parent, info, context, root, value: int) -> tuple:
         return (parent, info.field_name, context, root, value)
 
@@ -49,6 +60,10 @@ async def test_wrap_resolver_info_context_root() -> None:
 
 @pytest.mark.anyio
 async def test_wrap_resolver_without_info_and_missing_kwargs() -> None:
+    """
+    Verifies wrapped resolvers use defaults when info kwargs are omitted.
+    """
+
     def resolver(parent, value: int = 5) -> tuple:
         return (parent, value)
 

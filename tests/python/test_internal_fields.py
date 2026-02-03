@@ -24,6 +24,9 @@ class Foo:
 
 @pytest.mark.anyio
 async def test_internal_fields_ignored_in_schema_and_resolvers_use_them() -> None:
+    """
+    Verifies internal fields are omitted from SDL but usable in resolvers.
+    """
     schema = gm.Schema(query=Foo)
     sdl = schema.sdl()
 

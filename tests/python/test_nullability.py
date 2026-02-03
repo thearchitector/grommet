@@ -15,6 +15,9 @@ class Query:
 
 
 def test_nullability_sdl_shapes() -> None:
+    """
+    Verifies SDL nullability matches list and optional field annotations.
+    """
     schema = gm.Schema(query=Query)
     sdl = schema.sdl()
 

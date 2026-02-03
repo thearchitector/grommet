@@ -11,6 +11,9 @@ class Node:
 
 
 def test_recursive_type_sdl() -> None:
+    """
+    Verifies recursive type references appear in the generated SDL.
+    """
     schema = gm.Schema(query=Node)
     sdl = schema.sdl()
 

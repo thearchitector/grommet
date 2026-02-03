@@ -13,6 +13,9 @@ class RootQuery:
 
 @pytest.mark.anyio
 async def test_field_without_resolver_uses_root_value() -> None:
+    """
+    Verifies fields without resolvers read values from the root object.
+    """
     schema = gm.Schema(query=RootQuery)
     result = await schema.execute("{ value }", root={"value": "ok"})
 

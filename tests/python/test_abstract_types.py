@@ -75,10 +75,12 @@ class SearchQuery:
 
 @pytest.mark.anyio
 async def test_enum_input_output() -> None:
+    """
+    Verifies enum inputs are accepted and serialized in responses.
+    """
     schema = gm.Schema(query=ColorQuery)
     result = await schema.execute(
-        "query ($color: Color!) { paint(color: $color) }",
-        variables={"color": "RED"},
+        "query ($color: Color!) { paint(color: $color) }", variables={"color": "RED"}
     )
 
     assert result["data"]["paint"] == "RED"
@@ -86,6 +88,9 @@ async def test_enum_input_output() -> None:
 
 @pytest.mark.anyio
 async def test_interface_resolution() -> None:
+    """
+    Verifies interface results resolve to implementing types in responses.
+    """
     schema = gm.Schema(query=NodeQuery)
     result = await schema.execute("{ node { id ... on User { name } } }")
 
@@ -94,6 +99,9 @@ async def test_interface_resolution() -> None:
 
 @pytest.mark.anyio
 async def test_union_resolution() -> None:
+    """
+    Verifies union selections return the matched object fields.
+    """
     schema = gm.Schema(query=SearchQuery)
     result = await schema.execute(
         "query ($kind: String!) { result(kind: $kind) { ... on Book { title } ... on Movie { title } } }",

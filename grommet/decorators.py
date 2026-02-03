@@ -225,19 +225,13 @@ def type(
 
 @overload
 def input(
-    cls: pytype,
-    *,
-    name: str | None = None,
-    description: str | None = None,
+    cls: pytype, *, name: str | None = None, description: str | None = None
 ) -> "GrommetClass": ...
 
 
 @overload
 def input(
-    cls: None = None,
-    *,
-    name: str | None = None,
-    description: str | None = None,
+    cls: None = None, *, name: str | None = None, description: str | None = None
 ) -> "Callable[[pytype], GrommetClass]": ...
 
 
@@ -450,19 +444,13 @@ def scalar(
 
 @overload
 def enum_type(
-    cls: pytype,
-    *,
-    name: str | None = None,
-    description: str | None = None,
+    cls: pytype, *, name: str | None = None, description: str | None = None
 ) -> "GrommetClass": ...
 
 
 @overload
 def enum_type(
-    cls: None = None,
-    *,
-    name: str | None = None,
-    description: str | None = None,
+    cls: None = None, *, name: str | None = None, description: str | None = None
 ) -> "Callable[[pytype], GrommetClass]": ...
 
 
@@ -488,10 +476,7 @@ def enum_type(
 
 
 def union(
-    name: str,
-    *,
-    types: "Iterable[pytype]",
-    description: str | None = None,
+    name: str, *, types: "Iterable[pytype]", description: str | None = None
 ) -> "GrommetClass":
     """Creates a GraphQL union type."""
 

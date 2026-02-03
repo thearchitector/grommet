@@ -44,6 +44,9 @@ class InputValidationQuery:
 
 @pytest.mark.anyio
 async def test_argument_default_value_is_applied() -> None:
+    """
+    Verifies argument default values are applied when omitted.
+    """
     schema = gm.Schema(query=ArgDefaultQuery)
     result = await schema.execute("{ greet }")
 
@@ -52,6 +55,9 @@ async def test_argument_default_value_is_applied() -> None:
 
 @pytest.mark.anyio
 async def test_input_field_default_value_is_applied() -> None:
+    """
+    Verifies input field defaults are applied when input objects are empty.
+    """
     schema = gm.Schema(query=InputDefaultQuery)
     result = await schema.execute(
         "query ($options: Options!) { enabled(options: $options) }",
@@ -63,6 +69,9 @@ async def test_input_field_default_value_is_applied() -> None:
 
 @pytest.mark.anyio
 async def test_invalid_input_value_reports_error() -> None:
+    """
+    Ensures invalid input values return GraphQL errors.
+    """
     schema = gm.Schema(query=InputValidationQuery)
     result = await schema.execute(
         "query ($options: Options!) { enabled(options: $options) }",

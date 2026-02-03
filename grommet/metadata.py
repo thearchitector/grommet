@@ -155,10 +155,4 @@ class TypeSpec:
         return rendered
 
 
-_SCALARS = {
-    str: "String",
-    int: "Int",
-    float: "Float",
-    bool: "Boolean",
-    ID: "ID",
-}
+_SCALARS = {str: "String", int: "Int", float: "Float", bool: "Boolean", ID: "ID"}

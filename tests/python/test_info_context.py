@@ -11,6 +11,9 @@ if TYPE_CHECKING:
 
 @pytest.mark.anyio
 async def test_info_context_root_are_available() -> None:
+    """
+    Verifies resolvers receive info, context, root, and parent objects.
+    """
     root_obj = object()
     context_obj = object()
 
@@ -20,10 +23,7 @@ async def test_info_context_root_are_available() -> None:
         @gm.field
         @staticmethod
         async def inspect(
-            parent: "Any",
-            info: gm.Info,
-            context: "Any",
-            root: "Any",
+            parent: "Any", info: gm.Info, context: "Any", root: "Any"
         ) -> str:
             assert info.field_name == "inspect"
             assert info.context is context_obj

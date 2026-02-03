@@ -28,6 +28,9 @@ class CoerceQuery:
 
 @pytest.mark.anyio
 async def test_async_resolver_coerces_input_and_id() -> None:
+    """
+    Verifies async resolvers receive coerced input objects and ID scalars.
+    """
     schema = gm.Schema(query=CoerceQuery)
     result = await schema.execute(
         "query ($user: UserInput!) { label(user: $user) }",

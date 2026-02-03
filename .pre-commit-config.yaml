@@ -14,7 +14,7 @@ repos:
         language: system
         entry: mypy
         types: [python]
-        exclude: ^tests
+        exclude: ^(tests|scripts)/
         require_serial: true
   - repo: https://github.com/FeryET/pre-commit-rust
     rev: v1.2.1

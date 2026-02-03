@@ -20,6 +20,9 @@ class Query:
 
 @pytest.mark.anyio
 async def test_field_decorator_uses_resolver() -> None:
+    """
+    Verifies field resolvers execute and return values in responses.
+    """
     schema = gm.Schema(query=Query)
     result = await schema.execute("{ hello }")
 

@@ -15,11 +15,6 @@ dev = [
     "ruff",
     "maturin"
 ]
-docs = [
-    "mkdocs>=1.6",
-    "mkdocs-bootswatch>=1.1",
-    "pymdown-extensions>=10.0",
-]
 perf = [
     "strawberry-graphql",
 ]
@@ -37,12 +32,17 @@ exclude_also = ["if TYPE_CHECKING:"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
+exclude = "^tests/|^scripts/"
 
 [tool.ruff]
 target-version = "py313"
 
 [tool.ruff.lint]
 extend-select = ["B", "I", "ASYNC"]
+
+[tool.ruff.format]
+docstring-code-format = true
+skip-magic-trailing-comma = true
 
 [tool.maturin]
 bindings = "pyo3"

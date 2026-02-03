@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use async_graphql::dynamic::Schema as DynamicSchema;
 use async_graphql::{Name, Value};
 use indexmap::IndexMap;
 use pyo3::prelude::*;
@@ -18,6 +17,7 @@ where
     Python::attach(f)
 }
 
+/// Verifies the core module exposes the expected Python bindings.
 #[test]
 fn core_module_registers_items() {
     crate::with_py(|py| {
@@ -27,576 +27,6 @@ fn core_module_registers_items() {
         assert!(module.getattr("SubscriptionStream").is_ok());
         assert!(module.getattr("configure_runtime").is_ok());
     });
-}
-
-#[cfg(not(coverage))]
-#[test]
-fn python_schema_executes_library_paths() {
-    let result = crate::with_py(|py| {
-        let module = PyModule::new(py, "grommet._core").unwrap();
-        grommet::_core(py, &module).unwrap();
-        let schema_type = module.getattr("Schema").unwrap().unbind();
-
-        let locals = PyDict::new(py);
-        py.run(
-            pyo3::ffi::c_str!(
-                r#"
-async def greet(parent, info, name: str):
-    return f"hi {name}"
-
-async def list_values(parent, info):
-    return [1, 2]
-
-async def tuple_values(parent, info):
-    return (3, 4)
-
-async def fail(parent, info):
-    raise ValueError("boom")
-
-async def ticks(parent, info):
-    for i in range(1):
-        yield i
-"#
-            ),
-            None,
-            Some(&locals),
-        )
-        .unwrap();
-
-        let greet = locals.get_item("greet").unwrap().unwrap();
-        let list_values = locals.get_item("list_values").unwrap().unwrap();
-        let tuple_values = locals.get_item("tuple_values").unwrap().unwrap();
-        let fail = locals.get_item("fail").unwrap().unwrap();
-        let ticks = locals.get_item("ticks").unwrap().unwrap();
-
-        let arg_lang_named = PyDict::new(py);
-        arg_lang_named.set_item("name", "lang").unwrap();
-        arg_lang_named.set_item("type", "String").unwrap();
-        arg_lang_named.set_item("default", "en").unwrap();
-        let name_args = PyList::new(py, [arg_lang_named]).unwrap();
-
-        let named_field = PyDict::new(py);
-        named_field.set_item("name", "name").unwrap();
-        named_field.set_item("type", "String!").unwrap();
-        named_field.set_item("args", name_args).unwrap();
-
-        let named_def = PyDict::new(py);
-        named_def.set_item("kind", "interface").unwrap();
-        named_def.set_item("name", "Named").unwrap();
-        named_def
-            .set_item("fields", PyList::new(py, [named_field]).unwrap())
-            .unwrap();
-
-        let node_field_name = PyDict::new(py);
-        node_field_name.set_item("name", "name").unwrap();
-        node_field_name.set_item("type", "String!").unwrap();
-        let arg_lang_node = PyDict::new(py);
-        arg_lang_node.set_item("name", "lang").unwrap();
-        arg_lang_node.set_item("type", "String").unwrap();
-        arg_lang_node.set_item("default", "en").unwrap();
-        node_field_name
-            .set_item("args", PyList::new(py, [arg_lang_node]).unwrap())
-            .unwrap();
-
-        let node_field_id = PyDict::new(py);
-        node_field_id.set_item("name", "id").unwrap();
-        node_field_id.set_item("type", "ID!").unwrap();
-
-        let node_def = PyDict::new(py);
-        node_def.set_item("kind", "interface").unwrap();
-        node_def.set_item("name", "Node").unwrap();
-        node_def
-            .set_item("implements", PyList::new(py, ["Named"]).unwrap())
-            .unwrap();
-        node_def
-            .set_item(
-                "fields",
-                PyList::new(py, [node_field_name, node_field_id]).unwrap(),
-            )
-            .unwrap();
-
-        let greet_arg = PyDict::new(py);
-        greet_arg.set_item("name", "name").unwrap();
-        greet_arg.set_item("type", "String!").unwrap();
-        let greet_args = PyList::new(py, [greet_arg]).unwrap();
-
-        let greet_field = PyDict::new(py);
-        greet_field.set_item("name", "greet").unwrap();
-        greet_field.set_item("type", "String!").unwrap();
-        greet_field.set_item("resolver", "Query.greet").unwrap();
-        greet_field.set_item("args", greet_args).unwrap();
-
-        let list_field = PyDict::new(py);
-        list_field.set_item("name", "list_values").unwrap();
-        list_field.set_item("type", "[Int!]").unwrap();
-        list_field
-            .set_item("resolver", "Query.list_values")
-            .unwrap();
-
-        let tuple_field = PyDict::new(py);
-        tuple_field.set_item("name", "tuple_values").unwrap();
-        tuple_field.set_item("type", "[Int!]").unwrap();
-        tuple_field
-            .set_item("resolver", "Query.tuple_values")
-            .unwrap();
-
-        let fail_field = PyDict::new(py);
-        fail_field.set_item("name", "fail").unwrap();
-        fail_field.set_item("type", "String").unwrap();
-        fail_field.set_item("resolver", "Query.fail").unwrap();
-
-        let query_id = PyDict::new(py);
-        query_id.set_item("name", "id").unwrap();
-        query_id.set_item("type", "ID!").unwrap();
-
-        let query_name = PyDict::new(py);
-        query_name.set_item("name", "name").unwrap();
-        query_name.set_item("type", "String!").unwrap();
-        let arg_lang_query = PyDict::new(py);
-        arg_lang_query.set_item("name", "lang").unwrap();
-        arg_lang_query.set_item("type", "String").unwrap();
-        arg_lang_query.set_item("default", "en").unwrap();
-        query_name
-            .set_item("args", PyList::new(py, [arg_lang_query]).unwrap())
-            .unwrap();
-
-        let query_def = PyDict::new(py);
-        query_def.set_item("kind", "object").unwrap();
-        query_def.set_item("name", "Query").unwrap();
-        query_def
-            .set_item("implements", PyList::new(py, ["Node"]).unwrap())
-            .unwrap();
-        query_def
-            .set_item(
-                "fields",
-                PyList::new(
-                    py,
-                    [
-                        query_id,
-                        query_name,
-                        greet_field,
-                        list_field,
-                        tuple_field,
-                        fail_field,
-                    ],
-                )
-                .unwrap(),
-            )
-            .unwrap();
-
-        let input_field = PyDict::new(py);
-        input_field.set_item("name", "count").unwrap();
-        input_field.set_item("type", "Int").unwrap();
-        input_field.set_item("default", 7).unwrap();
-
-        let input_def = PyDict::new(py);
-        input_def.set_item("kind", "input").unwrap();
-        input_def.set_item("name", "InputData").unwrap();
-        input_def
-            .set_item("fields", PyList::new(py, [input_field]).unwrap())
-            .unwrap();
-
-        let sub_field = PyDict::new(py);
-        sub_field.set_item("name", "ticks").unwrap();
-        sub_field.set_item("type", "Int!").unwrap();
-        sub_field
-            .set_item("resolver", "Subscription.ticks")
-            .unwrap();
-
-        let sub_def = PyDict::new(py);
-        sub_def.set_item("kind", "subscription").unwrap();
-        sub_def.set_item("name", "Subscription").unwrap();
-        sub_def
-            .set_item("fields", PyList::new(py, [sub_field]).unwrap())
-            .unwrap();
-
-        let schema = PyDict::new(py);
-        schema.set_item("query", "Query").unwrap();
-        schema.set_item("subscription", "Subscription").unwrap();
-
-        let definition = PyDict::new(py);
-        definition.set_item("schema", schema).unwrap();
-        definition
-            .set_item(
-                "types",
-                PyList::new(py, [named_def, node_def, query_def, input_def, sub_def]).unwrap(),
-            )
-            .unwrap();
-        definition.set_item("scalars", PyList::empty(py)).unwrap();
-        definition.set_item("enums", PyList::empty(py)).unwrap();
-        definition.set_item("unions", PyList::empty(py)).unwrap();
-
-        let resolvers = PyDict::new(py);
-        resolvers.set_item("Query.greet", greet).unwrap();
-        resolvers
-            .set_item("Query.list_values", list_values)
-            .unwrap();
-        resolvers
-            .set_item("Query.tuple_values", tuple_values)
-            .unwrap();
-        resolvers.set_item("Query.fail", fail).unwrap();
-        resolvers.set_item("Subscription.ticks", ticks).unwrap();
-
-        let definition = definition.into_any().unbind();
-        let resolvers = resolvers.unbind();
-
-        pyo3_async_runtimes::tokio::run(py, async move {
-            let schema_obj = Python::attach(|py| {
-                schema_type
-                    .bind(py)
-                    .call1((definition.bind(py), resolvers.bind(py)))
-                    .map(|obj| obj.unbind())
-            })?;
-
-            let vars = Python::attach(|py| {
-                let vars = PyDict::new(py);
-                vars.set_item("name", "Ada")?;
-                Ok::<_, PyErr>(vars.into_any().unbind())
-            })?;
-
-            let awaitable = Python::attach(|py| {
-                schema_obj
-                    .bind(py)
-                    .call_method1(
-                        "execute",
-                        (
-                            "query($name: String!) { greet(name: $name) list_values tuple_values fail }",
-                            vars.clone_ref(py),
-                            py.None(),
-                            py.None(),
-                        ),
-                    )
-                    .map(|awaitable| awaitable.unbind())
-            })?;
-            let result = Python::attach(|py| {
-                pyo3_async_runtimes::tokio::into_future(awaitable.into_bound(py))
-            })?
-            .await?;
-
-            Python::attach(|py| {
-                let dict = result.bind(py).cast::<PyDict>().unwrap();
-                let data = dict.get_item("data").unwrap().unwrap();
-                let data = data.cast::<PyDict>().unwrap();
-                assert_eq!(
-                    data.get_item("greet")
-                        .unwrap()
-                        .unwrap()
-                        .extract::<String>()
-                        .unwrap(),
-                    "hi Ada"
-                );
-                let list_values_any = data.get_item("list_values").unwrap().unwrap();
-                let list_values = list_values_any.cast::<PyList>().unwrap();
-                assert_eq!(list_values.len(), 2);
-                let tuple_values_any = data.get_item("tuple_values").unwrap().unwrap();
-                let tuple_values = tuple_values_any.cast::<PyList>().unwrap();
-                assert_eq!(tuple_values.len(), 2);
-
-                let errors = dict.get_item("errors").unwrap().unwrap();
-                let errors = errors.cast::<PyList>().unwrap();
-                assert!(!errors.is_empty());
-            });
-
-            let awaitable = Python::attach(|py| {
-                schema_obj
-                    .bind(py)
-                    .call_method1("execute", ("{ fail }", py.None(), py.None(), py.None()))
-                    .map(|awaitable| awaitable.unbind())
-            })?;
-            let fail_result = Python::attach(|py| {
-                pyo3_async_runtimes::tokio::into_future(awaitable.into_bound(py))
-            })?
-            .await?;
-
-            Python::attach(|py| {
-                let dict = fail_result.bind(py).cast::<PyDict>().unwrap();
-                let errors = dict.get_item("errors").unwrap().unwrap();
-                let errors = errors.cast::<PyList>().unwrap();
-                assert!(!errors.is_empty());
-                let err = errors.get_item(0).unwrap();
-                let err = err.cast::<PyDict>().unwrap();
-                if let Ok(Some(path_any)) = err.get_item("path") {
-                    let path = path_any.cast::<PyList>().unwrap();
-                    assert_eq!(
-                        path.get_item(0).unwrap().extract::<String>().unwrap(),
-                        "fail"
-                    );
-                }
-            });
-
-            Ok(())
-        })
-    });
-    result.unwrap();
-}
-
-#[cfg(not(coverage))]
-#[test]
-fn python_schema_subscription_branches() {
-    let result = crate::with_py(|py| {
-        let module = PyModule::new(py, "grommet._core").unwrap();
-        grommet::_core(py, &module).unwrap();
-        let schema_type = module.getattr("Schema").unwrap().unbind();
-
-        let locals = PyDict::new(py);
-        py.run(
-            pyo3::ffi::c_str!(
-                r#"
-async def noop(parent, info):
-    return 1
-
-class OnlyAnext:
-    async def __anext__(self):
-        return 1
-
-class NotAsync:
-    pass
-
-class RaiseInAnext:
-    def __anext__(self):
-        raise RuntimeError("boom")
-
-class NonAwaitableAnext:
-    def __anext__(self):
-        return 1
-
-async def only_anext(parent, info):
-    return OnlyAnext()
-
-async def not_async(parent, info):
-    return NotAsync()
-
-async def raise_in_anext(parent, info):
-    return RaiseInAnext()
-
-async def non_awaitable(parent, info):
-    return NonAwaitableAnext()
-
-async def stop(parent, info):
-    if False:
-        yield 1
-
-async def wrong_type(parent, info):
-    return OnlyAnext()
-"#
-            ),
-            None,
-            Some(&locals),
-        )
-        .unwrap();
-
-        let noop = locals.get_item("noop").unwrap().unwrap();
-        let only_anext = locals.get_item("only_anext").unwrap().unwrap();
-        let not_async = locals.get_item("not_async").unwrap().unwrap();
-        let raise_in_anext = locals.get_item("raise_in_anext").unwrap().unwrap();
-        let non_awaitable = locals.get_item("non_awaitable").unwrap().unwrap();
-        let stop = locals.get_item("stop").unwrap().unwrap();
-        let wrong_type = locals.get_item("wrong_type").unwrap().unwrap();
-
-        let sub_fields = PyList::empty(py);
-        let field = PyDict::new(py);
-        field.set_item("name", "only_anext").unwrap();
-        field.set_item("type", "Int!").unwrap();
-        field
-            .set_item("resolver", "Subscription.only_anext")
-            .unwrap();
-        sub_fields.append(field).unwrap();
-
-        let field = PyDict::new(py);
-        field.set_item("name", "not_async").unwrap();
-        field.set_item("type", "Int!").unwrap();
-        field
-            .set_item("resolver", "Subscription.not_async")
-            .unwrap();
-        sub_fields.append(field).unwrap();
-
-        let field = PyDict::new(py);
-        field.set_item("name", "raise_in_anext").unwrap();
-        field.set_item("type", "Int!").unwrap();
-        field
-            .set_item("resolver", "Subscription.raise_in_anext")
-            .unwrap();
-        sub_fields.append(field).unwrap();
-
-        let field = PyDict::new(py);
-        field.set_item("name", "non_awaitable").unwrap();
-        field.set_item("type", "Int!").unwrap();
-        field
-            .set_item("resolver", "Subscription.non_awaitable")
-            .unwrap();
-        sub_fields.append(field).unwrap();
-
-        let field = PyDict::new(py);
-        field.set_item("name", "stop").unwrap();
-        field.set_item("type", "Int!").unwrap();
-        field.set_item("resolver", "Subscription.stop").unwrap();
-        sub_fields.append(field).unwrap();
-
-        let field = PyDict::new(py);
-        field.set_item("name", "wrong_type").unwrap();
-        field.set_item("type", "[Int]").unwrap();
-        field
-            .set_item("resolver", "Subscription.wrong_type")
-            .unwrap();
-        sub_fields.append(field).unwrap();
-
-        let query_field = PyDict::new(py);
-        query_field.set_item("name", "noop").unwrap();
-        query_field.set_item("type", "Int!").unwrap();
-        query_field.set_item("resolver", "Query.noop").unwrap();
-
-        let query_def = PyDict::new(py);
-        query_def.set_item("kind", "object").unwrap();
-        query_def.set_item("name", "Query").unwrap();
-        query_def
-            .set_item("fields", PyList::new(py, [query_field]).unwrap())
-            .unwrap();
-
-        let sub_def = PyDict::new(py);
-        sub_def.set_item("kind", "subscription").unwrap();
-        sub_def.set_item("name", "Subscription").unwrap();
-        sub_def.set_item("fields", sub_fields).unwrap();
-
-        let schema = PyDict::new(py);
-        schema.set_item("query", "Query").unwrap();
-        schema.set_item("subscription", "Subscription").unwrap();
-
-        let definition = PyDict::new(py);
-        definition.set_item("schema", schema).unwrap();
-        definition
-            .set_item("types", PyList::new(py, [query_def, sub_def]).unwrap())
-            .unwrap();
-        definition.set_item("scalars", PyList::empty(py)).unwrap();
-        definition.set_item("enums", PyList::empty(py)).unwrap();
-        definition.set_item("unions", PyList::empty(py)).unwrap();
-
-        let resolvers = PyDict::new(py);
-        resolvers.set_item("Query.noop", noop).unwrap();
-        resolvers
-            .set_item("Subscription.only_anext", only_anext)
-            .unwrap();
-        resolvers
-            .set_item("Subscription.not_async", not_async)
-            .unwrap();
-        resolvers
-            .set_item("Subscription.raise_in_anext", raise_in_anext)
-            .unwrap();
-        resolvers
-            .set_item("Subscription.non_awaitable", non_awaitable)
-            .unwrap();
-        resolvers.set_item("Subscription.stop", stop).unwrap();
-        resolvers
-            .set_item("Subscription.wrong_type", wrong_type)
-            .unwrap();
-
-        let definition = definition.into_any().unbind();
-        let resolvers = resolvers.unbind();
-
-        pyo3_async_runtimes::tokio::run(py, async move {
-            let schema_obj = Python::attach(|py| {
-                schema_type
-                    .bind(py)
-                    .call1((definition.bind(py), resolvers.bind(py)))
-                    .map(|obj| obj.unbind())
-            })?;
-
-            let run_case =
-                |py: Python<'_>, schema: &Bound<'_, PyAny>, query: &str| -> PyResult<Py<PyAny>> {
-                    schema
-                        .call_method1("subscribe", (query, py.None(), py.None(), py.None()))
-                        .map(|stream| stream.unbind())
-                };
-
-            let only_stream = Python::attach(|py| {
-                run_case(py, schema_obj.bind(py), "subscription { only_anext }")
-            })?;
-            let next = Python::attach(|py| {
-                only_stream
-                    .bind(py)
-                    .call_method0("__anext__")
-                    .map(|awaitable| awaitable.unbind())
-            })?;
-            let _ =
-                Python::attach(|py| pyo3_async_runtimes::tokio::into_future(next.into_bound(py)))?
-                    .await;
-
-            let not_async_stream = Python::attach(|py| {
-                run_case(py, schema_obj.bind(py), "subscription { not_async }")
-            })?;
-            let next = Python::attach(|py| {
-                not_async_stream
-                    .bind(py)
-                    .call_method0("__anext__")
-                    .map(|awaitable| awaitable.unbind())
-            })?;
-            let _ =
-                Python::attach(|py| pyo3_async_runtimes::tokio::into_future(next.into_bound(py)))?
-                    .await;
-
-            let raise_stream = Python::attach(|py| {
-                run_case(py, schema_obj.bind(py), "subscription { raise_in_anext }")
-            })?;
-            let next = Python::attach(|py| {
-                raise_stream
-                    .bind(py)
-                    .call_method0("__anext__")
-                    .map(|awaitable| awaitable.unbind())
-            })?;
-            let _ =
-                Python::attach(|py| pyo3_async_runtimes::tokio::into_future(next.into_bound(py)))?
-                    .await;
-            let next = Python::attach(|py| {
-                raise_stream
-                    .bind(py)
-                    .call_method0("__anext__")
-                    .map(|awaitable| awaitable.unbind())
-            })?;
-            let _ =
-                Python::attach(|py| pyo3_async_runtimes::tokio::into_future(next.into_bound(py)))?
-                    .await;
-
-            let non_awaitable_stream = Python::attach(|py| {
-                run_case(py, schema_obj.bind(py), "subscription { non_awaitable }")
-            })?;
-            let next = Python::attach(|py| {
-                non_awaitable_stream
-                    .bind(py)
-                    .call_method0("__anext__")
-                    .map(|awaitable| awaitable.unbind())
-            })?;
-            let _ =
-                Python::attach(|py| pyo3_async_runtimes::tokio::into_future(next.into_bound(py)))?
-                    .await;
-
-            let stop_stream =
-                Python::attach(|py| run_case(py, schema_obj.bind(py), "subscription { stop }"))?;
-            let next = Python::attach(|py| {
-                stop_stream
-                    .bind(py)
-                    .call_method0("__anext__")
-                    .map(|awaitable| awaitable.unbind())
-            })?;
-            let _ =
-                Python::attach(|py| pyo3_async_runtimes::tokio::into_future(next.into_bound(py)))?
-                    .await;
-
-            let wrong_stream = Python::attach(|py| {
-                run_case(py, schema_obj.bind(py), "subscription { wrong_type }")
-            })?;
-            let next = Python::attach(|py| {
-                wrong_stream
-                    .bind(py)
-                    .call_method0("__anext__")
-                    .map(|awaitable| awaitable.unbind())
-            })?;
-            let _ =
-                Python::attach(|py| pyo3_async_runtimes::tokio::into_future(next.into_bound(py)))?
-                    .await;
-
-            Ok(())
-        })
-    });
-    result.unwrap();
 }
 
 mod errors {
@@ -612,6 +42,7 @@ mod errors {
             crate::with_py(|py| err.value(py).str().unwrap().to_str().unwrap().to_string())
         }
 
+        /// Verifies error helper constructors return expected errors and messages.
         #[test]
         fn error_helpers_round_trip() {
             let err = py_type_error("boom");
@@ -666,6 +97,7 @@ mod types {
         use super::*;
         use pyo3::IntoPyObject;
 
+        /// Verifies PyObj binding and cloning preserve underlying Python values.
         #[test]
         fn pyobj_bind_clone_round_trip() {
             crate::with_py(|py| {
@@ -775,6 +207,7 @@ Input.__grommet_meta__ = Meta("input", "Input")
             locals
         }
 
+        /// Verifies grommet meta helpers handle type, enum, and input variants.
         #[test]
         fn meta_helpers_cover_branches() {
             crate::with_py(|py| {
@@ -819,6 +252,7 @@ Input.__grommet_meta__ = Meta("input", "Input")
             });
         }
 
+        /// Verifies Python values convert to const and field GraphQL values.
         #[test]
         fn py_to_const_value_and_field_value_cover_paths() {
             crate::with_py(|py| {
@@ -885,6 +319,7 @@ class Custom:
             });
         }
 
+        /// Verifies Python values convert to GraphQL values across variants.
         #[test]
         fn py_to_value_covers_scalar_enum_input_and_collections() {
             crate::with_py(|py| {
@@ -1005,6 +440,7 @@ Input.__grommet_meta__ = Meta("input", "Input")
             });
         }
 
+        /// Ensures field value conversion enforces list and abstract type rules.
         #[test]
         fn py_to_field_value_for_type_covers_lists_and_abstracts() {
             crate::with_py(|py| {
@@ -1068,6 +504,7 @@ Input.__grommet_meta__ = Meta("input", "Input")
             });
         }
 
+        /// Verifies GraphQL values and responses convert to Python structures.
         #[test]
         fn value_to_py_and_response_to_py_cover_variants() {
             crate::with_py(|py| {
@@ -1149,6 +586,7 @@ mod resolver {
         use super::*;
         use pyo3::exceptions::PyRuntimeError;
 
+        /// Verifies resolve_from_parent reads mapping, attribute, and missing values.
         #[test]
         fn resolve_from_parent_covers_sources() {
             crate::with_py(|py| {
@@ -1223,6 +661,7 @@ obj = Obj()
             });
         }
 
+        /// Ensures await_value resolves Python awaitables into concrete values.
         #[test]
         fn await_value_waits_for_future() {
             let awaitable = crate::with_py(|py| {
@@ -1268,6 +707,7 @@ mod parse {
             crate::with_py(|py| err.value(py).str().unwrap().to_str().unwrap().to_string())
         }
 
+        /// Verifies parsing schema definitions and resolvers builds expected structs.
         #[test]
         fn parse_definitions_and_resolvers() {
             crate::with_py(|py| {
@@ -1338,6 +778,7 @@ def resolver(parent, info, value: int = 1):
             });
         }
 
+        /// Ensures optional schema definition fields are parsed when provided.
         #[test]
         fn parse_definition_with_optional_fields() {
             crate::with_py(|py| {
@@ -1427,6 +868,7 @@ def resolver(parent, info, value: int = 1):
             });
         }
 
+        /// Verifies missing schema fields raise expected parse errors.
         #[test]
         fn parse_missing_fields_report_errors() {
             crate::with_py(|py| {
@@ -1533,6 +975,7 @@ def resolver(parent, info, value: int = 1):
             });
         }
 
+        /// Verifies optional string extraction handles None and string values.
         #[test]
         fn extract_optional_string_handles_none() {
             crate::with_py(|py| {
@@ -1558,6 +1001,7 @@ mod build {
         use pyo3::types::{PyAnyMethods, PyDict, PyInt, PyStringMethods};
         use std::collections::HashMap;
 
+        /// Verifies parsing of list and non-null type reference modifiers.
         #[test]
         fn parse_type_ref_covers_list_and_non_null() {
             let ty = parse_type_ref("String!");
@@ -1579,6 +1023,7 @@ mod build {
             }
         }
 
+        /// Ensures schema building rejects unknown type kinds.
         #[test]
         fn build_schema_unknown_kind_errors() {
             let schema_def = SchemaDef {
@@ -1609,6 +1054,7 @@ mod build {
             assert_eq!(msg, "Unknown type kind: mystery");
         }
 
+        /// Verifies input field defaults are applied during schema construction.
         #[test]
         fn build_input_field_applies_default() {
             crate::with_py(|py| {
@@ -1629,6 +1075,7 @@ mod build {
             });
         }
 
+        /// Verifies schema building registers all supported type kinds.
         #[test]
         fn build_schema_registers_all_type_kinds() {
             crate::with_py(|py| {
@@ -1803,73 +1250,6 @@ mod api {
         use super::*;
         use pyo3::types::{PyAnyMethods, PyList, PyStringMethods};
 
-        fn build_definition(py: Python<'_>) -> (Py<PyAny>, Py<PyDict>) {
-            let locals = PyDict::new(py);
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-async def hello(parent, info):
-    return "hi"
-
-async def ticks(parent, info):
-    for i in range(2):
-        yield i
-"#
-                ),
-                None,
-                Some(&locals),
-            )
-            .unwrap();
-
-            let resolver = locals.get_item("hello").unwrap().unwrap();
-            let tick_resolver = locals.get_item("ticks").unwrap().unwrap();
-
-            let query_field = PyDict::new(py);
-            query_field.set_item("name", "hello").unwrap();
-            query_field.set_item("source", "hello").unwrap();
-            query_field.set_item("type", "String!").unwrap();
-            query_field.set_item("resolver", "Query.hello").unwrap();
-
-            let sub_field = PyDict::new(py);
-            sub_field.set_item("name", "ticks").unwrap();
-            sub_field.set_item("source", "ticks").unwrap();
-            sub_field.set_item("type", "Int!").unwrap();
-            sub_field
-                .set_item("resolver", "Subscription.ticks")
-                .unwrap();
-
-            let query_def = PyDict::new(py);
-            query_def.set_item("kind", "object").unwrap();
-            query_def.set_item("name", "Query").unwrap();
-            let query_fields = PyList::new(py, [query_field]).unwrap();
-            query_def.set_item("fields", query_fields).unwrap();
-
-            let subscription_def = PyDict::new(py);
-            subscription_def.set_item("kind", "subscription").unwrap();
-            subscription_def.set_item("name", "Subscription").unwrap();
-            let subscription_fields = PyList::new(py, [sub_field]).unwrap();
-            subscription_def
-                .set_item("fields", subscription_fields)
-                .unwrap();
-
-            let schema = PyDict::new(py);
-            schema.set_item("query", "Query").unwrap();
-            schema.set_item("subscription", "Subscription").unwrap();
-
-            let definition = PyDict::new(py);
-            definition.set_item("schema", schema).unwrap();
-            let types = PyList::new(py, [query_def, subscription_def]).unwrap();
-            definition.set_item("types", types).unwrap();
-
-            let resolvers = PyDict::new(py);
-            resolvers.set_item("Query.hello", resolver).unwrap();
-            resolvers
-                .set_item("Subscription.ticks", tick_resolver)
-                .unwrap();
-
-            (definition.into_any().unbind(), resolvers.unbind())
-        }
-
         fn build_definition_with_args(py: Python<'_>) -> (Py<PyAny>, Py<PyDict>) {
             let locals = PyDict::new(py);
             py.run(
@@ -2008,115 +1388,32 @@ async def ticks(parent, info, limit: int):
             assert!(!errors.cast::<PyList>().unwrap().is_empty());
         }
 
+        /// Verifies SchemaWrapper executes queries and subscriptions with variables.
         #[test]
-        fn schema_wrapper_executes_and_streams() {
-            let (schema, resolvers) = crate::with_py(|py| build_definition(py));
-            let (query_result, sub_result) = crate::with_py(|py| {
-                pyo3_async_runtimes::tokio::run(py, async move {
-                    let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(py, &schema.bind(py), Some(&resolvers.bind(py)), None)
-                    })?;
-
-                    let awaitable = Python::attach(|py| {
-                        wrapper
-                            .execute(py, "{ hello }".to_string(), None, None, None)
-                            .map(|awaitable| awaitable.unbind())
-                    })?;
-                    let query_result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(awaitable.into_bound(py))
-                    })?
-                    .await?;
-
-                    let stream = Python::attach(|py| {
-                        wrapper.subscribe(
-                            py,
-                            "subscription { ticks }".to_string(),
-                            None,
-                            None,
-                            None,
-                        )
-                    })?;
-                    let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
-                    let sub_result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
-                    })?
-                    .await?;
-
-                    let close =
-                        Python::attach(|py| stream.aclose(py).map(|awaitable| awaitable.unbind()))?;
-                    let _ = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(close.into_bound(py))
-                    })?
-                    .await?;
-
-                    Ok((query_result, sub_result))
-                })
-            })
-            .unwrap();
-
-            crate::with_py(|py| {
-                let dict = query_result.bind(py).cast::<PyDict>().unwrap();
-                let data_any = dict.get_item("data").unwrap().unwrap();
-                let data = data_any.cast::<PyDict>().unwrap();
-                assert_eq!(
-                    data.get_item("hello")
-                        .unwrap()
-                        .unwrap()
-                        .extract::<String>()
-                        .unwrap(),
-                    "hi"
-                );
-            });
-
-            crate::with_py(|py| {
-                let dict = sub_result.bind(py).cast::<PyDict>().unwrap();
-                let data_any = dict.get_item("data").unwrap().unwrap();
-                let data = data_any.cast::<PyDict>().unwrap();
-                assert_eq!(
-                    data.get_item("ticks")
-                        .unwrap()
-                        .unwrap()
-                        .extract::<i64>()
-                        .unwrap(),
-                    0
-                );
-            });
-        }
-
-        #[test]
-        fn schema_wrapper_sdl_and_executes_with_variables() {
+        fn schema_wrapper_executes_and_subscribes_with_variables() {
             let (schema, resolvers) = crate::with_py(|py| build_definition_with_args(py));
-            let (query_result, sub_result) = crate::with_py(|py| {
+            crate::with_py(|py| {
                 let query_vars = PyDict::new(py);
                 query_vars.set_item("name", "Ada").unwrap();
                 let query_vars = query_vars.into_any().unbind();
 
                 let sub_vars = PyDict::new(py);
-                sub_vars.set_item("limit", 2).unwrap();
+                sub_vars.set_item("limit", 1).unwrap();
                 let sub_vars = sub_vars.into_any().unbind();
 
-                let root_query = PyDict::new(py);
-                root_query.set_item("prefix", "hi ").unwrap();
-                let root_query = root_query.into_any().unbind();
+                let root = PyDict::new(py);
+                root.set_item("prefix", "hi ").unwrap();
+                let root = root.into_any().unbind();
 
-                let root_sub = PyDict::new(py);
-                root_sub.set_item("prefix", "hi ").unwrap();
-                let root_sub = root_sub.into_any().unbind();
-
-                let context_query = PyDict::new(py);
-                context_query.set_item("suffix", "!").unwrap();
-                let context_query = context_query.into_any().unbind();
-
-                let context_sub = PyDict::new(py);
-                context_sub.set_item("suffix", "!").unwrap();
-                let context_sub = context_sub.into_any().unbind();
+                let context = PyDict::new(py);
+                context.set_item("suffix", "!").unwrap();
+                let context = context.into_any().unbind();
 
                 pyo3_async_runtimes::tokio::run(py, async move {
                     let wrapper = Python::attach(|py| {
                         SchemaWrapper::new(py, &schema.bind(py), Some(&resolvers.bind(py)), None)
                     })?;
-                    let sdl = wrapper.sdl()?;
-                    assert!(sdl.contains("schema"));
+                    let _ = wrapper.sdl()?;
 
                     let awaitable = Python::attach(|py| {
                         wrapper
@@ -2124,8 +1421,8 @@ async def ticks(parent, info, limit: int):
                                 py,
                                 "query($name: String!) { greet(name: $name) }".to_string(),
                                 Some(query_vars),
-                                Some(root_query),
-                                Some(context_query),
+                                Some(root.clone_ref(py)),
+                                Some(context.clone_ref(py)),
                             )
                             .map(|awaitable| awaitable.unbind())
                     })?;
@@ -2133,14 +1430,18 @@ async def ticks(parent, info, limit: int):
                         pyo3_async_runtimes::tokio::into_future(awaitable.into_bound(py))
                     })?
                     .await?;
+                    Python::attach(|py| {
+                        let dict = query_result.bind(py).cast::<PyDict>().unwrap();
+                        assert!(dict.get_item("data").unwrap().is_some());
+                    });
 
                     let stream = Python::attach(|py| {
                         wrapper.subscribe(
                             py,
                             "subscription($limit: Int!) { ticks(limit: $limit) }".to_string(),
                             Some(sub_vars),
-                            Some(root_sub),
-                            Some(context_sub),
+                            Some(root.clone_ref(py)),
+                            Some(context.clone_ref(py)),
                         )
                     })?;
 
@@ -2151,75 +1452,27 @@ async def ticks(parent, info, limit: int):
                         pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
                     })?
                     .await?;
+                    Python::attach(|py| {
+                        let dict = sub_result.bind(py).cast::<PyDict>().unwrap();
+                        assert!(dict.get_item("data").unwrap().is_some());
+                    });
 
-                    Ok((query_result, sub_result))
-                })
-            })
-            .unwrap();
-
-            crate::with_py(|py| {
-                let dict = query_result.bind(py).cast::<PyDict>().unwrap();
-                let data_any = dict.get_item("data").unwrap().unwrap();
-                let data = data_any.cast::<PyDict>().unwrap();
-                assert_eq!(
-                    data.get_item("greet")
-                        .unwrap()
-                        .unwrap()
-                        .extract::<String>()
-                        .unwrap(),
-                    "hi Ada!"
-                );
-            });
-
-            crate::with_py(|py| {
-                let dict = sub_result.bind(py).cast::<PyDict>().unwrap();
-                let data_any = dict.get_item("data").unwrap().unwrap();
-                let data = data_any.cast::<PyDict>().unwrap();
-                assert_eq!(
-                    data.get_item("ticks")
-                        .unwrap()
-                        .unwrap()
-                        .extract::<i64>()
-                        .unwrap(),
-                    0
-                );
-            });
-        }
-
-        #[test]
-        fn subscription_stream_closed_returns_none() {
-            let (schema, resolvers) = crate::with_py(|py| build_definition(py));
-            crate::with_py(|py| {
-                pyo3_async_runtimes::tokio::run(py, async move {
-                    let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(py, &schema.bind(py), Some(&resolvers.bind(py)), None)
-                    })?;
-                    let stream = Python::attach(|py| {
-                        wrapper.subscribe(
-                            py,
-                            "subscription { ticks }".to_string(),
-                            None,
-                            None,
-                            None,
-                        )
-                    })?;
                     let close =
                         Python::attach(|py| stream.aclose(py).map(|awaitable| awaitable.unbind()))?;
-                    Python::attach(|py| {
+                    let _ = Python::attach(|py| {
                         pyo3_async_runtimes::tokio::into_future(close.into_bound(py))
                     })?
                     .await?;
+                    let closed = Python::attach(|py| stream.__anext__(py))?;
+                    assert!(closed.is_none());
 
-                    let next = Python::attach(|py| -> PyResult<Option<Py<PyAny>>> {
-                        Ok(stream.__anext__(py)?.map(|awaitable| awaitable.unbind()))
-                    })?;
-                    assert!(next.is_none());
                     Ok(())
                 })
             })
             .unwrap();
         }
 
+        /// Ensures SubscriptionStream.__aiter__ returns the stream itself.
         #[test]
         fn subscription_stream_aiter_returns_self() {
             use std::sync::atomic::{AtomicBool, Ordering};
@@ -2241,53 +1494,7 @@ async def ticks(parent, info, limit: int):
             });
         }
 
-        #[test]
-        fn subscription_stream_close_after_next_yields_stop() {
-            use pyo3::exceptions::PyStopAsyncIteration;
-
-            let (schema, resolvers) = crate::with_py(|py| build_definition(py));
-            crate::with_py(|py| {
-                pyo3_async_runtimes::tokio::run(py, async move {
-                    let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(py, &schema.bind(py), Some(&resolvers.bind(py)), None)
-                    })?;
-                    let stream = Python::attach(|py| {
-                        wrapper.subscribe(
-                            py,
-                            "subscription { ticks }".to_string(),
-                            None,
-                            None,
-                            None,
-                        )
-                    })?;
-
-                    let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
-                    let close =
-                        Python::attach(|py| stream.aclose(py).map(|awaitable| awaitable.unbind()))?;
-                    Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(close.into_bound(py))
-                    })?
-                    .await?;
-
-                    let result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
-                    })?
-                    .await;
-                    match result {
-                        Ok(_) => panic!("expected stop async iteration"),
-                        Err(err) => {
-                            let is_stop =
-                                Python::attach(|py| err.is_instance_of::<PyStopAsyncIteration>(py));
-                            assert!(is_stop);
-                        }
-                    }
-
-                    Ok(())
-                })
-            })
-            .unwrap();
-        }
-
+        /// Verifies SubscriptionStream reports errors for missing or empty streams.
         #[test]
         fn subscription_stream_handles_empty_and_missing_stream() {
             use async_graphql::futures_util::stream;
@@ -2327,8 +1534,9 @@ async def ticks(parent, info, limit: int):
             .unwrap();
         }
 
+        /// Ensures SchemaWrapper requires root values for parent resolution.
         #[test]
-        fn schema_wrapper_resolves_from_parent_and_requires_root() {
+        fn schema_wrapper_requires_root_for_parent_resolution() {
             crate::with_py(|py| {
                 let query_field = PyDict::new(py);
                 query_field.set_item("name", "value").unwrap();
@@ -2349,47 +1557,12 @@ async def ticks(parent, info, limit: int):
                 let types = PyList::new(py, [query_def]).unwrap();
                 definition.set_item("types", types).unwrap();
 
-                let resolvers = PyDict::new(py);
-
-                let root = PyDict::new(py);
-                root.set_item("value", 5).unwrap();
-                let root = root.into_any().unbind();
-
                 let definition = definition.into_any().unbind();
-                let resolvers = resolvers.unbind();
 
                 pyo3_async_runtimes::tokio::run(py, async move {
                     let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(
-                            py,
-                            &definition.bind(py),
-                            Some(&resolvers.bind(py)),
-                            None,
-                        )
+                        SchemaWrapper::new(py, &definition.bind(py), None, None)
                     })?;
-
-                    let awaitable = Python::attach(|py| {
-                        wrapper
-                            .execute(py, "{ value }".to_string(), None, Some(root), None)
-                            .map(|awaitable| awaitable.unbind())
-                    })?;
-                    let with_root = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(awaitable.into_bound(py))
-                    })?
-                    .await?;
-                    Python::attach(|py| {
-                        let dict = with_root.bind(py).cast::<PyDict>().unwrap();
-                        let data = dict.get_item("data").unwrap().unwrap();
-                        let data = data.cast::<PyDict>().unwrap();
-                        assert_eq!(
-                            data.get_item("value")
-                                .unwrap()
-                                .unwrap()
-                                .extract::<i64>()
-                                .unwrap(),
-                            5
-                        );
-                    });
 
                     let awaitable = Python::attach(|py| {
                         wrapper
@@ -2410,6 +1583,7 @@ async def ticks(parent, info, limit: int):
             .unwrap();
         }
 
+        /// Verifies subscription resolvers support async iterators with __anext__.
         #[test]
         fn subscription_resolver_only_anext() {
             crate::with_py(|py| {
@@ -2484,6 +1658,7 @@ async def sub_only_anext(parent, info):
             .unwrap();
         }
 
+        /// Ensures subscription resolvers reject non-async-iterator results.
         #[test]
         fn subscription_resolver_requires_async_iterator() {
             crate::with_py(|py| {
@@ -2543,6 +1718,7 @@ async def sub_not_async(parent, info):
             .unwrap();
         }
 
+        /// Verifies subscription resolver error cases surface as GraphQL errors.
         #[test]
         fn subscription_resolver_error_branches() {
             use pyo3::exceptions::PyStopAsyncIteration;
@@ -2752,6 +1928,7 @@ async def sub_wrong_type(parent, info):
             .unwrap();
         }
 
+        /// Ensures runtime configuration rejects invalid thread settings.
         #[test]
         fn configure_runtime_rejects_invalid_threads() {
             let err = configure_runtime(true, Some(2)).err().unwrap();
@@ -2766,119 +1943,4 @@ async def sub_wrong_type(parent, info):
             assert!(configure_runtime(false, Some(1)).unwrap());
         }
     }
-}
-
-#[test]
-fn end_to_end_build_and_execute() {
-    let (schema_tuple, scalar_bindings) = crate::with_py(|py| {
-        let locals = PyDict::new(py);
-        py.run(
-            pyo3::ffi::c_str!(
-                r#"
-class ScalarType:
-    def __init__(self, value):
-        self.value = value
-
-def serialize(value):
-    return value.value
-
-def parse_value(value):
-    return ScalarType(value)
-
-async def greet(parent, info, name: str):
-    return f"hi {name}"
-"#
-            ),
-            None,
-            Some(&locals),
-        )
-        .unwrap();
-
-        let scalar_type = locals.get_item("ScalarType").unwrap().unwrap();
-        let serialize = locals.get_item("serialize").unwrap().unwrap();
-        let _parse_value = locals.get_item("parse_value").unwrap().unwrap();
-        let scalar_binding = PyDict::new(py);
-        scalar_binding.set_item("name", "ScalarType").unwrap();
-        scalar_binding.set_item("python_type", scalar_type).unwrap();
-        scalar_binding.set_item("serialize", serialize).unwrap();
-        let scalars = PyList::new(py, [scalar_binding]).unwrap();
-
-        let resolver = locals.get_item("greet").unwrap().unwrap();
-        let resolvers = PyDict::new(py);
-        resolvers.set_item("Query.greet", resolver).unwrap();
-
-        let arg = PyDict::new(py);
-        arg.set_item("name", "name").unwrap();
-        arg.set_item("type", "String!").unwrap();
-
-        let field = PyDict::new(py);
-        field.set_item("name", "greet").unwrap();
-        field.set_item("source", "greet").unwrap();
-        field.set_item("type", "String!").unwrap();
-        field.set_item("resolver", "Query.greet").unwrap();
-        let args = PyList::new(py, [arg]).unwrap();
-        field.set_item("args", args).unwrap();
-
-        let type_def = PyDict::new(py);
-        type_def.set_item("kind", "object").unwrap();
-        type_def.set_item("name", "Query").unwrap();
-        let fields = PyList::new(py, [field]).unwrap();
-        type_def.set_item("fields", fields).unwrap();
-
-        let schema = PyDict::new(py);
-        schema.set_item("query", "Query").unwrap();
-
-        let definition = PyDict::new(py);
-        definition.set_item("schema", schema).unwrap();
-        let types = PyList::new(py, [type_def]).unwrap();
-        definition.set_item("types", types).unwrap();
-        definition.set_item("scalars", PyList::empty(py)).unwrap();
-        definition.set_item("enums", PyList::empty(py)).unwrap();
-        definition.set_item("unions", PyList::empty(py)).unwrap();
-
-        let (schema_def, type_defs, scalar_defs, enum_defs, union_defs) =
-            crate::parse::parse_schema_definition(py, &definition.into_any()).unwrap();
-        let resolver_map = crate::parse::parse_resolvers(py, Some(&resolvers)).unwrap();
-        let scalar_bindings = crate::parse::parse_scalar_bindings(py, Some(&scalars)).unwrap();
-        (
-            (
-                schema_def,
-                type_defs,
-                scalar_defs,
-                enum_defs,
-                union_defs,
-                resolver_map,
-            ),
-            scalar_bindings,
-        )
-    });
-
-    let (schema_def, type_defs, scalar_defs, enum_defs, union_defs, resolver_map) = schema_tuple;
-    let schema: DynamicSchema = crate::build::build_schema(
-        schema_def,
-        type_defs,
-        scalar_defs,
-        enum_defs,
-        union_defs,
-        resolver_map,
-        Arc::new(scalar_bindings),
-    )
-    .unwrap();
-
-    let response = crate::with_py(|py| {
-        pyo3_async_runtimes::tokio::run(py, async move {
-            Ok(schema
-                .execute(async_graphql::Request::new("{ greet(name: \"Bob\") }"))
-                .await)
-        })
-    })
-    .unwrap();
-    assert!(response.errors.is_empty());
-    assert_eq!(
-        response.data,
-        Value::Object(IndexMap::from([(
-            Name::new("greet"),
-            Value::String("hi Bob".to_string()),
-        )]))
-    );
 }

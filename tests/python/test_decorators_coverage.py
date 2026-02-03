@@ -13,6 +13,10 @@ from grommet.metadata import MISSING
 
 
 def test_field_defaults_and_init_false() -> None:
+    """
+    Verifies field defaults set init to false for grommet fields.
+    """
+
     @dataclass
     class Query:
         @gm.field(default=5)
@@ -27,6 +31,10 @@ def test_field_defaults_and_init_false() -> None:
 
 
 def test_field_default_factory_applied() -> None:
+    """
+    Verifies field default_factory is preserved on grommet fields.
+    """
+
     @dataclass
     class Query:
         @gm.field(default_factory=lambda: 7)
@@ -41,6 +49,10 @@ def test_field_default_factory_applied() -> None:
 
 
 def test_field_from_resolver_defaults_init_false() -> None:
+    """
+    Ensures fields derived from resolvers default to init=False.
+    """
+
     def resolver(parent, info) -> int:
         return 1
 
@@ -57,6 +69,10 @@ def test_field_from_resolver_defaults_init_false() -> None:
 
 
 def test_field_from_resolver_respects_init() -> None:
+    """
+    Ensures field generation respects an explicit init flag.
+    """
+
     def resolver(parent, info) -> int:
         return 1
 
@@ -73,6 +89,10 @@ def test_field_from_resolver_respects_init() -> None:
 
 
 def test_field_default_conflict_raises() -> None:
+    """
+    Ensures specifying both default and default_factory raises errors.
+    """
+
     @dataclass
     class Query:
         @gm.field(default=1, default_factory=lambda: 2)
@@ -85,6 +105,10 @@ def test_field_default_conflict_raises() -> None:
 
 
 def test_missing_return_annotation_raises() -> None:
+    """
+    Ensures missing resolver return annotations raise a type error.
+    """
+
     @dataclass
     class Query:
         @gm.field
@@ -97,6 +121,10 @@ def test_missing_return_annotation_raises() -> None:
 
 
 def test_existing_annotation_skips_return_inference() -> None:
+    """
+    Verifies explicit field annotations are preserved without inference.
+    """
+
     @dataclass
     class Query:
         @gm.field
@@ -110,6 +138,10 @@ def test_existing_annotation_skips_return_inference() -> None:
 
 
 def test_annotations_mappingproxy_is_coerced() -> None:
+    """
+    Verifies mappingproxy annotations are coerced to dictionaries.
+    """
+
     @dataclass
     class Query:
         @gm.field
@@ -123,6 +155,10 @@ def test_annotations_mappingproxy_is_coerced() -> None:
 
 
 def test_classmethod_field_binds_class() -> None:
+    """
+    Verifies classmethod field resolvers bind the class object.
+    """
+
     @dataclass
     class Query:
         @gm.field
@@ -140,6 +176,10 @@ def test_classmethod_field_binds_class() -> None:
 
 
 def test_input_with_field_resolver_not_allowed() -> None:
+    """
+    Ensures input types cannot declare field resolvers.
+    """
+
     @dataclass
     class Input:
         @gm.field
@@ -152,6 +192,10 @@ def test_input_with_field_resolver_not_allowed() -> None:
 
 
 def test_interface_with_field_resolver_rewraps_dataclass() -> None:
+    """
+    Verifies interface decorator rewraps dataclasses with field resolvers.
+    """
+
     @dataclass
     class Node:
         @gm.field
@@ -165,16 +209,26 @@ def test_interface_with_field_resolver_rewraps_dataclass() -> None:
 
 
 def test_field_requires_callable() -> None:
+    """
+    Ensures field decorator rejects non-callable inputs.
+    """
     with pytest.raises(GrommetTypeError):
         gm.field(123)  # type: ignore[arg-type]
 
 
 def test_scalar_requires_callables() -> None:
+    """
+    Ensures scalar decorator requires serialize and parse callables.
+    """
     with pytest.raises(GrommetTypeError):
         gm.scalar()
 
 
 def test_scalar_direct_call_path() -> None:
+    """
+    Verifies scalar decorator works when invoked directly on a class.
+    """
+
     class CustomScalar:
         pass
 
@@ -185,6 +239,10 @@ def test_scalar_direct_call_path() -> None:
 
 
 def test_enum_requires_enum_subclass() -> None:
+    """
+    Ensures enum decorator rejects non-enum classes.
+    """
+
     class NotEnum:
         pass
 
@@ -193,6 +251,10 @@ def test_enum_requires_enum_subclass() -> None:
 
 
 def test_enum_decorator_returned_wrapper() -> None:
+    """
+    Verifies enum decorator factory attaches grommet metadata.
+    """
+
     class Color(enum.Enum):
         RED = 1
 
@@ -202,6 +264,10 @@ def test_enum_decorator_returned_wrapper() -> None:
 
 
 def test_union_validation_errors() -> None:
+    """
+    Ensures union decorator validates names and object type membership.
+    """
+
     @gm.type
     @dataclass
     class Obj:
@@ -222,6 +288,10 @@ def test_union_validation_errors() -> None:
 
 
 def test_interface_decorator_without_cls() -> None:
+    """
+    Verifies interface decorator factory attaches grommet metadata.
+    """
+
     @dataclass
     class Node:
         value: int

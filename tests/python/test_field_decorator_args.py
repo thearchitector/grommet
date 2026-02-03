@@ -29,6 +29,9 @@ class Query:
 
 @pytest.mark.anyio
 async def test_field_decorator_args_apply() -> None:
+    """
+    Verifies field decorator arguments affect execution and SDL output.
+    """
     schema = gm.Schema(query=Query)
     result = await schema.execute("{ greet kind }")
 
