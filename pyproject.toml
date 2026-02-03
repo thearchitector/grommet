@@ -5,6 +5,11 @@ description = "Dataclass-driven GraphQL schema with async-graphql execution."
 readme = "README.md"
 requires-python = ">=3.13,<4"
 dependencies = []
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
 
 [dependency-groups]
 dev = [
@@ -51,5 +56,5 @@ python-source = "."
 features = ["extension-module"]
 
 [build-system]
-requires = ["maturin>=1.7"]
+requires = ["maturin>=1.9.4"]
 build-backend = "maturin"
