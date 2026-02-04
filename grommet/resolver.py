@@ -1,4 +1,5 @@
 import inspect
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from .coercion import _arg_coercer, _default_value_for_annotation
@@ -19,8 +20,16 @@ if TYPE_CHECKING:
 _RESERVED_PARAM_NAMES = {"parent", "root", "self", "info", "context"}
 
 
+@lru_cache(maxsize=512)
+def _resolver_signature(resolver: "Callable[..., Any]") -> inspect.Signature:
+    return inspect.signature(resolver)
+
+
 def _resolver_params(resolver: "Callable[..., Any]") -> list[inspect.Parameter]:
-    sig = inspect.signature(resolver)
+    try:
+        sig = _resolver_signature(resolver)
+    except TypeError:
+        sig = inspect.signature(resolver)
     return [
         p
         for p in sig.parameters.values()
@@ -117,8 +126,7 @@ def _wrap_resolver(
     arg_params = [p for p in params if p.name not in _RESERVED_PARAM_NAMES]
 
     arg_defs: list[dict[str, "Any"]] = []
-    arg_annotations: dict[str, "Any"] = {}
-    arg_coercers: dict[str, "Callable[[Any], Any] | None"] = {}
+    arg_coercers: list[tuple[str, "Callable[[Any], Any] | None"]] = []
     for param in arg_params:
         annotation = hints.get(param.name, param.annotation)
         if annotation is inspect._empty:
@@ -133,8 +141,7 @@ def _wrap_resolver(
                 annotation, param.default
             )
         arg_defs.append(arg_def)
-        arg_annotations[param.name] = annotation
-        arg_coercers[param.name] = _arg_coercer(annotation)
+        arg_coercers.append((param.name, _arg_coercer(annotation)))
 
     async def wrapper(parent: "Any", info: "Any", **kwargs: "Any") -> "Any":
         call_kwargs: dict[str, "Any"] = {}
@@ -153,10 +160,9 @@ def _wrap_resolver(
             call_kwargs[context_param.name] = info_obj.context if info_obj else None
         if root_param is not None:
             call_kwargs[root_param.name] = info_obj.root if info_obj else None
-        for name, _annotation in arg_annotations.items():
+        for name, coercer in arg_coercers:
             if name in kwargs:
                 value = kwargs[name]
-                coercer = arg_coercers.get(name)
                 call_kwargs[name] = value if coercer is None else coercer(value)
         result = resolver(**call_kwargs)
         if is_subscription:

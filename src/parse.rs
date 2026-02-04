@@ -257,12 +257,13 @@ fn parse_type_def(item: &Bound<'_, PyAny>) -> PyResult<TypeDef> {
 
 fn type_def_from_input(input: TypeDefInput) -> PyResult<TypeDef> {
     let mut parsed_fields = Vec::with_capacity(input.fields.len());
-    for field in input.fields {
-        Python::attach(|py| {
+    let fields = input.fields;
+    Python::attach(|py| {
+        for field in fields {
             parsed_fields.push(parse_field_def(py, &field.bind(py))?);
-            Ok::<(), PyErr>(())
-        })?;
-    }
+        }
+        Ok::<(), PyErr>(())
+    })?;
     Ok(TypeDef {
         kind: input.kind,
         name: input.name,

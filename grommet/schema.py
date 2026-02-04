@@ -9,7 +9,7 @@ from .errors import schema_requires_query, unknown_type_kind
 from .metadata import MISSING, EnumMeta, ScalarMeta, TypeMeta, UnionMeta
 from .registry import _get_field_meta, _traverse_schema
 from .resolver import _wrap_resolver
-from .typespec import _get_type_meta, _maybe_type_name, _type_spec_from_annotation
+from .typespec import _get_type_meta, _type_spec_from_annotation
 from .typing_utils import _get_type_hints
 
 if TYPE_CHECKING:
@@ -90,6 +90,19 @@ def _build_schema_definition(
 ) -> "tuple[dict[str, Any], dict[str, Callable[..., Any]], list[dict[str, Any]]]":
     types_def: list[dict[str, "Any"]] = []
     resolvers: dict[str, "Callable[..., Any]"] = {}
+    type_meta_cache = registry
+
+    def type_name(tp: pytype) -> str:
+        meta = type_meta_cache.get(tp)
+        if meta is None:
+            meta = _get_type_meta(tp)
+            type_meta_cache[tp] = meta
+        return meta.name
+
+    def maybe_type_name(tp: pytype | None) -> str | None:
+        if tp is None:
+            return None
+        return type_name(tp)
 
     for cls, meta in registry.items():
         if meta.kind in ("object", "interface"):
@@ -141,9 +154,7 @@ def _build_schema_definition(
                     "name": meta.name,
                     "fields": fields_def,
                     "description": meta.description,
-                    "implements": [
-                        _get_type_meta(iface).name for iface in meta.implements
-                    ],
+                    "implements": [type_name(iface) for iface in meta.implements],
                 }
             )
         elif meta.kind == "input":
@@ -179,9 +190,9 @@ def _build_schema_definition(
 
     schema_def = {
         "schema": {
-            "query": _get_type_meta(query).name,
-            "mutation": _maybe_type_name(mutation),
-            "subscription": _maybe_type_name(subscription),
+            "query": type_name(query),
+            "mutation": maybe_type_name(mutation),
+            "subscription": maybe_type_name(subscription),
         },
         "types": types_def,
         "scalars": [
@@ -204,7 +215,7 @@ def _build_schema_definition(
             {
                 "name": meta.name,
                 "description": meta.description,
-                "types": [_get_type_meta(tp).name for tp in meta.types],
+                "types": [type_name(tp) for tp in meta.types],
             }
             for meta in unions.values()
         ],

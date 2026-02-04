@@ -1427,6 +1427,82 @@ async def ticks(parent, info, limit: int):
             .unwrap();
         }
 
+        /// Ensures SchemaWrapper can execute multiple queries concurrently.
+        #[test]
+        fn schema_wrapper_executes_concurrently() {
+            let (schema, resolvers) = crate::with_py(|py| build_definition_with_args(py));
+            crate::with_py(|py| {
+                let vars_one = PyDict::new(py);
+                vars_one.set_item("name", "Ada").unwrap();
+                let vars_one = vars_one.into_any().unbind();
+
+                let vars_two = PyDict::new(py);
+                vars_two.set_item("name", "Turing").unwrap();
+                let vars_two = vars_two.into_any().unbind();
+
+                let root = PyDict::new(py);
+                root.set_item("prefix", "hi ").unwrap();
+                let root = root.into_any().unbind();
+
+                let context = PyDict::new(py);
+                context.set_item("suffix", "!").unwrap();
+                let context = context.into_any().unbind();
+
+                pyo3_async_runtimes::tokio::run(py, async move {
+                    let wrapper = Python::attach(|py| {
+                        SchemaWrapper::new(py, &schema.bind(py), Some(&resolvers.bind(py)), None)
+                    })?;
+
+                    let await_one = Python::attach(|py| {
+                        wrapper
+                            .execute(
+                                py,
+                                "query($name: String!) { greet(name: $name) }".to_string(),
+                                Some(vars_one.clone_ref(py)),
+                                Some(root.clone_ref(py)),
+                                Some(context.clone_ref(py)),
+                            )
+                            .map(|awaitable| awaitable.unbind())
+                    })?;
+                    let await_two = Python::attach(|py| {
+                        wrapper
+                            .execute(
+                                py,
+                                "query($name: String!) { greet(name: $name) }".to_string(),
+                                Some(vars_two.clone_ref(py)),
+                                Some(root.clone_ref(py)),
+                                Some(context.clone_ref(py)),
+                            )
+                            .map(|awaitable| awaitable.unbind())
+                    })?;
+
+                    let fut_one = crate::runtime::into_future(await_one)?;
+                    let fut_two = crate::runtime::into_future(await_two)?;
+                    let (res_one, res_two) = tokio::join!(fut_one, fut_two);
+
+                    let res_one = res_one?;
+                    let res_two = res_two?;
+                    Python::attach(|py| {
+                        let dict = res_one.bind(py).cast::<PyDict>().unwrap();
+                        let data = dict.get_item("data").unwrap().unwrap();
+                        let data = data.cast::<PyDict>().unwrap();
+                        let greet = data.get_item("greet").unwrap().unwrap();
+                        assert_eq!(greet.extract::<String>().unwrap(), "hi Ada!");
+                    });
+                    Python::attach(|py| {
+                        let dict = res_two.bind(py).cast::<PyDict>().unwrap();
+                        let data = dict.get_item("data").unwrap().unwrap();
+                        let data = data.cast::<PyDict>().unwrap();
+                        let greet = data.get_item("greet").unwrap().unwrap();
+                        assert_eq!(greet.extract::<String>().unwrap(), "hi Turing!");
+                    });
+
+                    Ok(())
+                })
+            })
+            .unwrap();
+        }
+
         /// Verifies SubscriptionStream reports errors for missing or empty streams.
         #[test]
         fn subscription_stream_handles_empty_and_missing_stream() {

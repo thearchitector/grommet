@@ -115,11 +115,18 @@ gm.configure_runtime(use_current_thread=True)
 - Call `uvloop.install()` before creating or awaiting Grommet futures.
 - When using `asyncio.run`, create schemas and call Grommet APIs inside the coroutine passed to `asyncio.run`.
 
+## Free-Threaded Python
+
+Grommet currently opts out of free-threaded Python builds while we audit thread-safety for shared
+state and resolver execution. This is implemented by setting `gil_used = true` on the PyO3 module.
+
 ## Benchmarks
 
 ```bash
 uv run python scripts/bench_simple.py
 uv run python scripts/bench_large_list.py
+uv run python benchmarks/bench_schema_build.py
+uv run python benchmarks/bench_resolver_call.py
 ```
 
 ## Type stubs (experimental)
@@ -137,3 +144,7 @@ uv pip install -e .
 # or
 maturin develop
 ```
+
+For local Rust tests using uv-managed Python, ensure the `.venv` is present and that either
+`.cargo/config.toml` or your shell environment provides `PYO3_PYTHON`, `PYTHONHOME`, and
+`PYTHONPATH` pointing at the uv installation.

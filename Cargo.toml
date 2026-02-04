@@ -8,7 +8,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 
 [lib]
 name = "grommet"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [[test]]
 name = "rust"
@@ -17,9 +17,6 @@ path = "tests/test_rust.rs"
 [dependencies]
 async-graphql = "7.2.1"
 indexmap = "2"
-pyo3 = "0.27.2"
-pyo3-async-runtimes = { version = "0.27.0", features = ["tokio-runtime"] }
-tokio = { version = "1.49", features = ["rt-multi-thread", "sync"] }
-
-[features]
-extension-module = ["pyo3/extension-module"]
+pyo3 = "0.28.0"
+pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }
+tokio = { version = "1.49", features = ["rt-multi-thread", "sync", "macros"] }

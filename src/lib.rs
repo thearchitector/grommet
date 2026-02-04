@@ -14,7 +14,7 @@ use pyo3::prelude::*;
 use crate::api::{SchemaWrapper, SubscriptionStream, configure_runtime};
 
 // pyo3 module entrypoint for the python extension
-#[pymodule]
+#[pymodule(gil_used = true)]
 #[doc(hidden)]
 pub fn _core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<SchemaWrapper>()?;
