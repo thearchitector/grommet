@@ -146,5 +146,6 @@ maturin develop
 ```
 
 For local Rust tests using uv-managed Python, ensure the `.venv` is present and that either
-`.cargo/config.toml` or your shell environment provides `PYO3_PYTHON`, `PYTHONHOME`, and
-`PYTHONPATH` pointing at the uv installation.
+`.cargo/config.toml` or your shell environment provides `PYO3_PYTHON`. This repo includes a
+`.cargo/config.toml` that sets `PYO3_PYTHON=python`, so activate the uv environment before running
+`cargo test` (or override the variable if you use a different interpreter).

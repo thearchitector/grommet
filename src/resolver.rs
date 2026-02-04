@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use async_graphql::Error;
 use async_graphql::dynamic::{FieldValue, ResolverContext, TypeRef};
-use async_graphql::futures_util::stream::{self, BoxStream, StreamExt};
-use pyo3::exceptions::PyStopAsyncIteration;
+use async_graphql::futures_util::stream::{BoxStream, StreamExt};
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyTuple};
+use pyo3_async_runtimes::tokio;
 
 use crate::errors::{no_parent_value, py_err_to_error, subscription_requires_async_iterator};
-use crate::runtime::{await_awaitable, into_future};
+use crate::runtime::await_awaitable;
 use crate::types::{ContextValue, PyObj, RootValue, ScalarBinding};
 use crate::values::{build_kwargs, py_to_field_value_for_type};
 
@@ -51,12 +51,7 @@ pub(crate) async fn resolve_subscription_stream<'a>(
         resolve_subscription_value(ctx, resolver, arg_names, &field_name, &source_name).await?;
     let iterator =
         Python::attach(|py| subscription_iterator(value.bind(py))).map_err(py_err_to_error)?;
-    Ok(subscription_stream(
-        iterator,
-        scalar_bindings,
-        output_type,
-        abstract_types,
-    ))
+    subscription_stream(iterator, scalar_bindings, output_type, abstract_types)
 }
 
 fn subscription_iterator(value_ref: &Bound<'_, PyAny>) -> PyResult<PyObj> {
@@ -75,63 +70,30 @@ fn subscription_stream<'a>(
     scalar_bindings: Arc<Vec<ScalarBinding>>,
     output_type: TypeRef,
     abstract_types: Arc<HashSet<String>>,
-) -> BoxStream<'a, Result<FieldValue<'a>, Error>> {
-    let stream = stream::unfold(Some(iterator), move |state| {
-        let scalar_bindings = scalar_bindings.clone();
-        let output_type = output_type.clone();
-        let abstract_types = abstract_types.clone();
-        async move {
-            let iterator = match state {
-                Some(iterator) => iterator,
-                None => return None,
-            };
-
-            let awaitable = Python::attach(|py| -> PyResult<Py<PyAny>> {
-                let awaitable = iterator.bind(py).call_method0("__anext__")?;
-                Ok(awaitable.unbind())
-            });
-            let awaitable = match awaitable {
-                Ok(value) => value,
-                Err(err) => return Some((Err(py_err_to_error(err)), None)),
-            };
-
-            let awaited = into_future(awaitable);
-            let awaited = match awaited {
-                Ok(fut) => fut.await,
-                Err(err) => return Some((Err(py_err_to_error(err)), None)),
-            };
-
-            let next_value = match awaited {
-                Ok(value) => value,
-                Err(err) => {
-                    let is_stop =
-                        Python::attach(|py| err.is_instance_of::<PyStopAsyncIteration>(py));
-                    if is_stop {
-                        return None;
-                    }
-                    return Some((Err(py_err_to_error(err)), None));
-                }
-            };
-
+) -> Result<BoxStream<'a, Result<FieldValue<'a>, Error>>, Error> {
+    let stream =
+        Python::attach(|py| tokio::into_stream_v1(iterator.bind(py))).map_err(py_err_to_error)?;
+    let stream = stream.map(move |item| match item {
+        Ok(value) => {
             let value = match Python::attach(|py| {
                 py_to_field_value_for_type(
                     py,
-                    next_value.bind(py),
+                    value.bind(py),
                     &output_type,
                     scalar_bindings.as_ref(),
                     abstract_types.as_ref(),
                 )
             }) {
                 Ok(value) => value,
-                Err(err) => return Some((Err(py_err_to_error(err)), None)),
+                Err(err) => return Err(py_err_to_error(err)),
             };
             let value: FieldValue<'a> = value;
-
-            Some((Ok(value), Some(iterator)))
+            Ok(value)
         }
+        Err(err) => Err(py_err_to_error(err)),
     });
 
-    stream.boxed()
+    Ok(stream.boxed())
 }
 
 async fn resolve_python_value(

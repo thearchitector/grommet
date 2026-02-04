@@ -1,14 +1,11 @@
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import Any
 
 import pytest
 
 import grommet as gm
-
-if TYPE_CHECKING:
-    from typing import Any
 
 
 @gm.type
@@ -22,7 +19,7 @@ class Query:
 class Subscription:
     @gm.field
     @staticmethod
-    async def countdown(parent: "Any", info: "Any", limit: int) -> AsyncIterator[int]:
+    async def countdown(parent: Any, info: Any, limit: int) -> AsyncIterator[int]:
         for i in range(limit):
             yield i
 
@@ -80,7 +77,7 @@ async def test_subscription_backpressure_serializes_anext() -> None:
     class LocalSubscription:
         @gm.field
         @staticmethod
-        async def numbers(parent: "Any", info: "Any") -> AsyncIterable[int]:
+        async def numbers(parent: Any, info: Any) -> AsyncIterable[int]:
             for _ in range(2):
                 value = await queue.get()
                 yield value
@@ -104,4 +101,32 @@ async def test_subscription_backpressure_serializes_anext() -> None:
     second = await task2
     assert second["data"]["numbers"] == 20
 
+    await stream.aclose()
+
+
+@pytest.mark.anyio
+async def test_subscription_stream_surfaces_errors() -> None:
+    """
+    Ensures subscription stream items include GraphQL errors when iteration fails.
+    """
+
+    @gm.type
+    @dataclass
+    class LocalQuery:
+        ok: str = "ok"
+
+    @gm.type
+    @dataclass
+    class LocalSubscription:
+        @gm.field
+        @staticmethod
+        async def boom(parent: Any, info: Any) -> AsyncIterator[int]:
+            if False:
+                yield 1
+            raise ValueError("boom")
+
+    schema = gm.Schema(query=LocalQuery, subscription=LocalSubscription)
+    stream = schema.subscribe("subscription { boom }")
+    payload = await anext(stream)
+    assert payload["errors"]
     await stream.aclose()

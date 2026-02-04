@@ -18,5 +18,5 @@ path = "tests/test_rust.rs"
 async-graphql = "7.2.1"
 indexmap = "2"
 pyo3 = "0.28.0"
-pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }
+pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime", "unstable-streams"] }
 tokio = { version = "1.49", features = ["rt-multi-thread", "sync", "macros"] }

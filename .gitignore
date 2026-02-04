@@ -21,7 +21,6 @@ htmlcov/
 
 # Rust
 target/
-.cargo
 
 # OS/editor
 .DS_Store
