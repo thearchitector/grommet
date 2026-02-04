@@ -60,6 +60,20 @@ def resolver_missing_return_annotation(
     )
 
 
+def resolver_requires_async(resolver_name: str, field_name: str) -> GrommetTypeError:
+    return GrommetTypeError(
+        f"Resolver {resolver_name} for field '{field_name}' must be async."
+    )
+
+
+def subscription_requires_async_iterator(
+    resolver_name: str, field_name: str
+) -> GrommetTypeError:
+    return GrommetTypeError(
+        f"Subscription resolver {resolver_name} for field '{field_name}' must return an async iterator."
+    )
+
+
 def union_input_not_supported() -> GrommetTypeError:
     return GrommetTypeError("Union types cannot be used as input")
 

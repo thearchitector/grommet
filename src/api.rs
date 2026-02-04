@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_graphql::dynamic::Schema;
 use async_graphql::futures_util::stream::{BoxStream, StreamExt};
@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 use crate::build::build_schema;
 use crate::errors::runtime_threads_conflict;
 use crate::parse::{parse_resolvers, parse_scalar_bindings, parse_schema_definition};
+use crate::runtime::future_into_py;
 use crate::types::{ContextValue, PyObj, RootValue, ScalarBinding};
 use crate::values::{py_to_const_value, response_to_py};
 
@@ -75,7 +76,7 @@ impl SchemaWrapper {
         let context_value = context.map(|obj| ContextValue(PyObj::new(obj)));
         let schema = self.schema.clone();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        future_into_py(py, async move {
             let mut request = Request::new(query);
             if let Some(vars) = vars_value {
                 request = request.variables(Variables::from_value(vars));
@@ -148,7 +149,7 @@ impl SubscriptionStream {
         }
         let stream = self.stream.clone();
         let closed = self.closed.clone();
-        let awaitable = pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let awaitable = future_into_py(py, async move {
             if closed.load(Ordering::SeqCst) {
                 return Err(PyErr::new::<PyStopAsyncIteration, _>(""));
             }
@@ -167,7 +168,7 @@ impl SubscriptionStream {
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let stream = self.stream.clone();
         let closed = self.closed.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        future_into_py(py, async move {
             closed.store(true, Ordering::SeqCst);
             let mut guard = stream.lock().await;
             *guard = None;

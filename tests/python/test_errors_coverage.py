@@ -56,6 +56,18 @@ from grommet.errors import GrommetSchemaError, GrommetTypeError, GrommetValueErr
             "Resolver resolve missing return annotation for field 'field'.",
         ),
         (
+            errors.resolver_requires_async,
+            ("resolve", "field"),
+            GrommetTypeError,
+            "Resolver resolve for field 'field' must be async.",
+        ),
+        (
+            errors.subscription_requires_async_iterator,
+            ("resolve", "field"),
+            GrommetTypeError,
+            "Subscription resolver resolve for field 'field' must return an async iterator.",
+        ),
+        (
             errors.union_input_not_supported,
             (),
             GrommetTypeError,

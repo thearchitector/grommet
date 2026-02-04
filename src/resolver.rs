@@ -1,16 +1,15 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use async_graphql::Error;
 use async_graphql::dynamic::{FieldValue, ResolverContext, TypeRef};
 use async_graphql::futures_util::stream::{self, BoxStream, StreamExt};
-use async_graphql::Error;
 use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyTuple};
 
-use crate::errors::{
-    no_parent_value, py_err_to_error, py_type_error, subscription_requires_async_iterator,
-};
+use crate::errors::{no_parent_value, py_err_to_error, subscription_requires_async_iterator};
+use crate::runtime::{await_awaitable, into_future};
 use crate::types::{ContextValue, PyObj, RootValue, ScalarBinding};
 use crate::values::{build_kwargs, py_to_field_value_for_type};
 
@@ -48,7 +47,8 @@ pub(crate) async fn resolve_subscription_stream<'a>(
     output_type: TypeRef,
     abstract_types: Arc<HashSet<String>>,
 ) -> Result<BoxStream<'a, Result<FieldValue<'a>, Error>>, Error> {
-    let value = resolve_python_value(ctx, resolver, arg_names, &field_name, &source_name).await?;
+    let value =
+        resolve_subscription_value(ctx, resolver, arg_names, &field_name, &source_name).await?;
     let iterator =
         Python::attach(|py| subscription_iterator(value.bind(py))).map_err(py_err_to_error)?;
     Ok(subscription_stream(
@@ -95,15 +95,7 @@ fn subscription_stream<'a>(
                 Err(err) => return Some((Err(py_err_to_error(err)), None)),
             };
 
-            let awaited = Python::attach(|py| {
-                let awaitable = awaitable.into_bound(py);
-                if !awaitable.hasattr("__await__")? {
-                    return Err(py_type_error(
-                        "Subscription iterator __anext__ must return awaitable",
-                    ));
-                }
-                pyo3_async_runtimes::tokio::into_future(awaitable)
-            });
+            let awaited = into_future(awaitable);
             let awaited = match awaited {
                 Ok(fut) => fut.await,
                 Err(err) => return Some((Err(py_err_to_error(err)), None)),
@@ -151,7 +143,8 @@ async fn resolve_python_value(
 ) -> Result<Py<PyAny>, Error> {
     let (root_value, context, parent) = extract_context(&ctx);
 
-    let (is_awaitable, value) = if let Some(resolver) = resolver {
+    let has_resolver = resolver.is_some();
+    let value = if let Some(resolver) = resolver {
         Python::attach(|py| {
             call_resolver(
                 py,
@@ -171,11 +164,58 @@ async fn resolve_python_value(
             .map_err(py_err_to_error)?
     };
 
-    if is_awaitable {
+    if has_resolver {
         await_value(value).await
     } else {
         Ok(value)
     }
+}
+
+async fn resolve_subscription_value(
+    ctx: ResolverContext<'_>,
+    resolver: Option<PyObj>,
+    arg_names: Arc<Vec<String>>,
+    field_name: &str,
+    source_name: &str,
+) -> Result<Py<PyAny>, Error> {
+    let (root_value, context, parent) = extract_context(&ctx);
+
+    let (value, has_resolver) = if let Some(resolver) = resolver {
+        let value = Python::attach(|py| {
+            call_resolver(
+                py,
+                &ctx,
+                &resolver,
+                &arg_names,
+                field_name,
+                parent.as_ref(),
+                root_value.as_ref(),
+                context.as_ref(),
+            )
+        })
+        .map_err(py_err_to_error)?;
+        (value, true)
+    } else {
+        let parent = parent.ok_or_else(no_parent_value)?;
+        let value = Python::attach(|py| resolve_from_parent(py, &parent, source_name))
+            .map_err(py_err_to_error)?;
+        (value, false)
+    };
+
+    if has_resolver {
+        let (is_async_iter, is_awaitable) = Python::attach(|py| {
+            let bound = value.bind(py);
+            let is_async_iter = bound.hasattr("__aiter__")? || bound.hasattr("__anext__")?;
+            let is_awaitable = bound.hasattr("__await__")?;
+            Ok((is_async_iter, is_awaitable))
+        })
+        .map_err(py_err_to_error)?;
+        if !is_async_iter && is_awaitable {
+            return await_value(value).await;
+        }
+    }
+
+    Ok(value)
 }
 
 fn extract_context(ctx: &ResolverContext<'_>) -> (Option<PyObj>, Option<PyObj>, Option<PyObj>) {
@@ -199,7 +239,7 @@ fn call_resolver(
     parent: Option<&PyObj>,
     root_value: Option<&PyObj>,
     context: Option<&PyObj>,
-) -> PyResult<(bool, Py<PyAny>)> {
+) -> PyResult<Py<PyAny>> {
     let kwargs = build_kwargs(py, ctx, arg_names)?;
     let info = PyDict::new(py);
     info.set_item("field_name", field_name)?;
@@ -219,15 +259,10 @@ fn call_resolver(
     };
     let args = PyTuple::new(py, [parent_obj, info.into_any().unbind()])?;
     let result = resolver.clone_ref(py).call(py, args, Some(&kwargs))?;
-    let is_awaitable = result.bind(py).hasattr("__await__")?;
-    Ok((is_awaitable, result))
+    Ok(result)
 }
 
-fn resolve_from_parent(
-    py: Python<'_>,
-    parent: &PyObj,
-    source_name: &str,
-) -> PyResult<(bool, Py<PyAny>)> {
+fn resolve_from_parent(py: Python<'_>, parent: &PyObj, source_name: &str) -> PyResult<Py<PyAny>> {
     let parent_ref = parent.bind(py);
     let value = if let Ok(dict) = parent_ref.cast::<PyDict>() {
         match dict.get_item(source_name)? {
@@ -241,15 +276,9 @@ fn resolve_from_parent(
     } else {
         py.None()
     };
-    let is_awaitable = value.bind(py).hasattr("__await__")?;
-    Ok((is_awaitable, value))
+    Ok(value)
 }
 
 async fn await_value(value: Py<PyAny>) -> Result<Py<PyAny>, Error> {
-    let awaited =
-        Python::attach(|py| pyo3_async_runtimes::tokio::into_future(value.into_bound(py)))
-            .map_err(py_err_to_error)?
-            .await
-            .map_err(py_err_to_error)?;
-    Ok(awaited)
+    await_awaitable(value).await
 }

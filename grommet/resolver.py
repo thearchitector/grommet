@@ -2,7 +2,11 @@ import inspect
 from typing import TYPE_CHECKING
 
 from .coercion import _arg_coercer, _default_value_for_annotation
-from .errors import resolver_missing_annotation
+from .errors import (
+    resolver_missing_annotation,
+    resolver_requires_async,
+    subscription_requires_async_iterator,
+)
 from .info import Info
 from .typespec import _type_spec_from_annotation
 from .typing_utils import _get_type_hints
@@ -61,9 +65,49 @@ def _resolver_arg_annotations(resolver: "Callable[..., Any]") -> dict[str, "Any"
     return {p.name: hints.get(p.name, p.annotation) for p in arg_params}
 
 
+def _resolver_name(resolver: "Callable[..., Any]") -> str:
+    name = getattr(resolver, "__name__", None)
+    if name:
+        return str(name)
+    func = getattr(resolver, "func", None)
+    if func is not None:
+        name = getattr(func, "__name__", None)
+        if name:
+            return str(name)
+    return type(resolver).__name__
+
+
+def _is_coroutine_callable(resolver: "Callable[..., Any]") -> bool:
+    if inspect.iscoroutinefunction(resolver):
+        return True
+    func = getattr(resolver, "func", None)
+    return func is not None and inspect.iscoroutinefunction(func)
+
+
+def _is_asyncgen_callable(resolver: "Callable[..., Any]") -> bool:
+    if inspect.isasyncgenfunction(resolver):
+        return True
+    func = getattr(resolver, "func", None)
+    return func is not None and inspect.isasyncgenfunction(func)
+
+
+def _is_async_iterator(value: "Any") -> bool:
+    return hasattr(value, "__aiter__") or hasattr(value, "__anext__")
+
+
 def _wrap_resolver(
-    resolver: "Callable[..., Any]",
+    resolver: "Callable[..., Any]", *, kind: str, field_name: str
 ) -> "tuple[Callable[..., Any], list[dict[str, Any]]]":
+    resolver_name = _resolver_name(resolver)
+    is_subscription = kind == "subscription"
+    is_asyncgen = _is_asyncgen_callable(resolver)
+    is_coroutine = _is_coroutine_callable(resolver)
+    if is_subscription:
+        if not (is_asyncgen or is_coroutine):
+            raise resolver_requires_async(resolver_name, field_name)
+    elif not is_coroutine:
+        raise resolver_requires_async(resolver_name, field_name)
+
     hints = _get_type_hints(resolver)
     params = _resolver_params(resolver)
     parent_param = _find_param(params, {"parent", "self"})
@@ -78,7 +122,7 @@ def _wrap_resolver(
     for param in arg_params:
         annotation = hints.get(param.name, param.annotation)
         if annotation is inspect._empty:
-            raise resolver_missing_annotation(resolver.__name__, param.name)
+            raise resolver_missing_annotation(resolver_name, param.name)
         force_nullable = param.default is not inspect._empty
         arg_spec = _type_spec_from_annotation(
             annotation, expect_input=True, force_nullable=force_nullable
@@ -115,8 +159,13 @@ def _wrap_resolver(
                 coercer = arg_coercers.get(name)
                 call_kwargs[name] = value if coercer is None else coercer(value)
         result = resolver(**call_kwargs)
-        if inspect.isawaitable(result):
-            return await result
-        return result
+        if is_subscription:
+            if is_asyncgen:
+                return result
+            awaited = await result
+            if not _is_async_iterator(awaited):
+                raise subscription_requires_async_iterator(resolver_name, field_name)
+            return awaited
+        return await result
 
     return wrapper, arg_defs

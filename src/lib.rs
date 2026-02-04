@@ -5,12 +5,13 @@ mod build;
 mod errors;
 mod parse;
 mod resolver;
+mod runtime;
 mod types;
 mod values;
 
 use pyo3::prelude::*;
 
-use crate::api::{configure_runtime, SchemaWrapper, SubscriptionStream};
+use crate::api::{SchemaWrapper, SubscriptionStream, configure_runtime};
 
 // pyo3 module entrypoint for the python extension
 #[pymodule]

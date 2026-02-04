@@ -72,6 +72,10 @@ mod errors {
     }
 }
 
+mod runtime {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/runtime.rs"));
+}
+
 mod types {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/types.rs"));
 }
@@ -88,8 +92,8 @@ mod values {
             ErrorExtensionValues, Name, PathSegment, Pos, Response, ServerError, Value,
         };
         use indexmap::IndexMap;
-        use pyo3::types::{PyAnyMethods, PyBool, PyBytes, PyDict, PyInt, PyList, PyStringMethods};
         use pyo3::IntoPyObject;
+        use pyo3::types::{PyAnyMethods, PyBool, PyBytes, PyDict, PyInt, PyList, PyStringMethods};
         use std::collections::HashSet;
 
         fn make_scalar_binding(py: Python<'_>) -> ScalarBinding {
@@ -552,12 +556,12 @@ mod resolver {
                 let dict = PyDict::new(py);
                 dict.set_item("value", 3).unwrap();
                 let parent = PyObj::new(dict.into_any().unbind());
-                let (_awaitable, value) = resolve_from_parent(py, &parent, "value").unwrap();
+                let value = resolve_from_parent(py, &parent, "value").unwrap();
                 assert_eq!(value.bind(py).extract::<i64>().unwrap(), 3);
 
                 let dict = PyDict::new(py);
                 let parent = PyObj::new(dict.into_any().unbind());
-                let (_awaitable, value) = resolve_from_parent(py, &parent, "missing").unwrap();
+                let value = resolve_from_parent(py, &parent, "missing").unwrap();
                 assert!(value.bind(py).is_none());
 
                 let class = PyDict::new(py);
@@ -576,7 +580,7 @@ obj = Obj()
                 .unwrap();
                 let obj = class.get_item("obj").unwrap().unwrap().unbind();
                 let parent = PyObj::new(obj);
-                let (_awaitable, value) = resolve_from_parent(py, &parent, "attr").unwrap();
+                let value = resolve_from_parent(py, &parent, "attr").unwrap();
                 assert_eq!(value.bind(py).extract::<i64>().unwrap(), 4);
 
                 let class = PyDict::new(py);
@@ -597,7 +601,7 @@ obj = Obj()
                 .unwrap();
                 let obj = class.get_item("obj").unwrap().unwrap().unbind();
                 let parent = PyObj::new(obj);
-                let (_awaitable, value) = resolve_from_parent(py, &parent, "item").unwrap();
+                let value = resolve_from_parent(py, &parent, "item").unwrap();
                 assert_eq!(value.bind(py).extract::<i64>().unwrap(), 5);
 
                 let class = PyDict::new(py);
@@ -615,7 +619,7 @@ obj = Obj()
                 .unwrap();
                 let obj = class.get_item("obj").unwrap().unwrap().unbind();
                 let parent = PyObj::new(obj);
-                let (_awaitable, value) = resolve_from_parent(py, &parent, "missing").unwrap();
+                let value = resolve_from_parent(py, &parent, "missing").unwrap();
                 assert!(value.bind(py).is_none());
             });
         }
@@ -854,18 +858,18 @@ def resolver(parent, info, value: int = 1):
                 assert_eq!(err_message(err), "Missing types");
 
                 let type_dict = PyDict::new(py);
-                let err = parse_type_def(py, &type_dict.into_any()).err().unwrap();
+                let err = parse_type_def(&type_dict.into_any()).err().unwrap();
                 assert_eq!(err_message(err), "Missing type kind");
 
                 let type_dict = PyDict::new(py);
                 type_dict.set_item("kind", "object").unwrap();
-                let err = parse_type_def(py, &type_dict.into_any()).err().unwrap();
+                let err = parse_type_def(&type_dict.into_any()).err().unwrap();
                 assert_eq!(err_message(err), "Missing type name");
 
                 let type_dict = PyDict::new(py);
                 type_dict.set_item("kind", "object").unwrap();
                 type_dict.set_item("name", "Query").unwrap();
-                let err = parse_type_def(py, &type_dict.into_any()).err().unwrap();
+                let err = parse_type_def(&type_dict.into_any()).err().unwrap();
                 assert_eq!(err_message(err), "Missing fields");
 
                 let enum_dict = PyDict::new(py);
@@ -1385,10 +1389,7 @@ async def ticks(parent, info, limit: int):
                             )
                             .map(|awaitable| awaitable.unbind())
                     })?;
-                    let query_result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(awaitable.into_bound(py))
-                    })?
-                    .await?;
+                    let query_result = crate::runtime::into_future(awaitable)?.await?;
                     Python::attach(|py| {
                         let dict = query_result.bind(py).cast::<PyDict>().unwrap();
                         assert!(dict.get_item("data").unwrap().is_some());
@@ -1407,10 +1408,7 @@ async def ticks(parent, info, limit: int):
                     let next = Python::attach(|py| -> PyResult<Py<PyAny>> {
                         Ok(stream.__anext__(py)?.expect("expected awaitable").unbind())
                     })?;
-                    let sub_result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
-                    })?
-                    .await?;
+                    let sub_result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| {
                         let dict = sub_result.bind(py).cast::<PyDict>().unwrap();
                         assert!(dict.get_item("data").unwrap().is_some());
@@ -1418,10 +1416,7 @@ async def ticks(parent, info, limit: int):
 
                     let close =
                         Python::attach(|py| stream.aclose(py).map(|awaitable| awaitable.unbind()))?;
-                    let _ = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(close.into_bound(py))
-                    })?
-                    .await?;
+                    let _ = crate::runtime::into_future(close)?.await?;
                     let closed =
                         Python::attach(|py| Ok::<bool, PyErr>(stream.__anext__(py)?.is_none()))?;
                     assert!(closed);
@@ -1435,10 +1430,10 @@ async def ticks(parent, info, limit: int):
         /// Verifies SubscriptionStream reports errors for missing or empty streams.
         #[test]
         fn subscription_stream_handles_empty_and_missing_stream() {
-            use async_graphql::futures_util::stream;
             use async_graphql::futures_util::StreamExt;
-            use std::sync::atomic::AtomicBool;
+            use async_graphql::futures_util::stream;
             use std::sync::Arc;
+            use std::sync::atomic::AtomicBool;
             use tokio::sync::Mutex;
 
             crate::with_py(|py| {
@@ -1449,10 +1444,7 @@ async def ticks(parent, info, limit: int):
                     };
                     let next =
                         Python::attach(|py| missing.__anext__(py).unwrap().unwrap().unbind());
-                    let result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
-                    })?
-                    .await;
+                    let result = crate::runtime::into_future(next)?.await;
                     assert!(result.is_err());
 
                     let empty_stream = stream::empty::<async_graphql::Response>().boxed();
@@ -1461,10 +1453,7 @@ async def ticks(parent, info, limit: int):
                         closed: Arc::new(AtomicBool::new(false)),
                     };
                     let next = Python::attach(|py| empty.__anext__(py).unwrap().unwrap().unbind());
-                    let result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
-                    })?
-                    .await;
+                    let result = crate::runtime::into_future(next)?.await;
                     assert!(result.is_err());
                     Ok(())
                 })
@@ -1507,10 +1496,7 @@ async def ticks(parent, info, limit: int):
                             .execute(py, "{ value }".to_string(), None, None, None)
                             .map(|awaitable| awaitable.unbind())
                     })?;
-                    let without_root = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(awaitable.into_bound(py))
-                    })?
-                    .await?;
+                    let without_root = crate::runtime::into_future(awaitable)?.await?;
                     Python::attach(|py| {
                         assert_response_has_errors(without_root.bind(py));
                     });
@@ -1569,10 +1555,7 @@ async def sub_only_anext(parent, info):
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;
                     let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
-                    let result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
-                    })?
-                    .await?;
+                    let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| {
                         let dict = result.bind(py).cast::<PyDict>().unwrap();
                         let data = dict.get_item("data").unwrap().unwrap();
@@ -1643,10 +1626,7 @@ async def sub_not_async(parent, info):
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;
                     let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
-                    let result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
-                    })?
-                    .await?;
+                    let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| {
                         assert_response_has_errors(result.bind(py));
                     });
@@ -1739,16 +1719,10 @@ async def sub_wrong_type(parent, info):
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;
                     let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
-                    let result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
-                    })?
-                    .await?;
+                    let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| assert_response_has_errors(result.bind(py)));
                     let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
-                    let _ = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
-                    })?
-                    .await;
+                    let _ = crate::runtime::into_future(next)?.await;
 
                     let (definition, resolvers) = Python::attach(|py| {
                         build_subscription_definition(
@@ -1770,10 +1744,7 @@ async def sub_wrong_type(parent, info):
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;
                     let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
-                    let result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
-                    })?
-                    .await?;
+                    let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| assert_response_has_errors(result.bind(py)));
 
                     let (definition, resolvers) = Python::attach(|py| {
@@ -1796,10 +1767,7 @@ async def sub_wrong_type(parent, info):
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;
                     let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
-                    let result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
-                    })?
-                    .await;
+                    let result = crate::runtime::into_future(next)?.await;
                     if let Err(err) = result {
                         let is_stop =
                             Python::attach(|py| err.is_instance_of::<PyStopAsyncIteration>(py));
@@ -1828,10 +1796,7 @@ async def sub_wrong_type(parent, info):
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;
                     let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
-                    let result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
-                    })?
-                    .await?;
+                    let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| assert_response_has_errors(result.bind(py)));
 
                     let (definition, resolvers) = Python::attach(|py| {
@@ -1854,10 +1819,7 @@ async def sub_wrong_type(parent, info):
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;
                     let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
-                    let result = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(next.into_bound(py))
-                    })?
-                    .await?;
+                    let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| assert_response_has_errors(result.bind(py)));
 
                     Ok(())

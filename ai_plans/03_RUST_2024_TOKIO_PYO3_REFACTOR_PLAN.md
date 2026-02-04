@@ -1,107 +1,174 @@
 # Implementation Plan: Rust 2024 + Tokio 1.49 + PyO3 async runtime refactor
 
-## Research findings that drive changes
-- Runtime usage is concentrated in `src/api.rs` (future_into_py + runtime init), `src/resolver.rs` (into_future), and tests (`tests/test_rust.rs`).
-- Tokio usage is limited to `tokio::runtime::Builder` and `tokio::sync::Mutex` (no tokio macros in production code).
-- `pyo3-async-runtimes` best practice is to:
-  - Convert Python coroutines with `pyo3_async_runtimes::tokio::into_future` (await in Rust).
-  - Convert Rust futures with `pyo3_async_runtimes::tokio::future_into_py` (await in Python).
-  - Avoid `#[tokio::main]`/`#[async_std::main]` for PyO3 interop.
-- uvloop compatibility requires installing the uvloop policy on the Python side before creating/awaiting Rust futures (call inside the coroutine passed to `asyncio.run`).
-- `dict-derive` provides `FromPyObject`/`IntoPyObject` derives for mapping dicts ⇄ Rust structs, which can replace manual parsing in `src/parse.rs` if compatible with PyO3 0.27.
-- Python resolver wrapping (`grommet/resolver.py`) currently checks awaitables at runtime; we can enforce async-only resolvers in Python and simplify Rust call paths.
-- PyO3 conversion docs emphasize that Python-native types (`Bound<'py, PyAny>`, `PyDict`, `PyList`) are near zero-cost compared to converting into Rust std types.
+This plan is grounded in the current code paths:
+- Rust async interop lives in `src/api.rs` (`SchemaWrapper.execute`, `SubscriptionStream.__anext__`, `SubscriptionStream.aclose`) and `src/resolver.rs` (`into_future` + awaitable checks).
+- Python resolver wrapping lives in `grommet/resolver.py` and is wired by `grommet/schema.py::_build_schema_definition`.
+- Manual dict parsing for schema definitions lives in `src/parse.rs` and is validated by missing-field tests in `tests/test_rust.rs`.
 
-## 1) Toolchain + dependency updates
-**Files:** `Cargo.toml` (and optionally `rust-toolchain.toml`).
+## 1) Rust 2024 toolchain + edition bump [x]
 
-- [ ] Update `edition = "2024"` in `Cargo.toml`.
-- [ ] Pin Tokio to `1.49` and trim features to those actually used:
-  - Required today: runtime builder + `tokio::sync::Mutex`.
-  - Plan: remove `macros`; keep `rt-multi-thread` + `sync`.
-  - If we keep `builder.enable_all()`, add `time`/`io`/`net` or replace `enable_all()` with only the needed `enable_*` calls.
-- [ ] Confirm `pyo3`/`pyo3-async-runtimes` versions remain compatible with Tokio 1.49.
-- [ ] If CI/tooling needs it, add `rust-toolchain.toml` with a Rust version that supports Edition 2024 (1.85+).
-- [ ] Rust 2024 migration pass:
-  - Run `cargo fix --edition` to apply rust-2024-compatibility lints.
-  - Audit for new prelude imports (`Future`, `IntoFuture`) causing method ambiguities; disambiguate with explicit trait paths if needed.
-  - Check for `gen` identifiers and rename to `r#gen` if any remain (keyword_idents_2024).
-  - Check for reserved guarded string syntax (`#"..."#`, `###`) in macro calls and insert spaces if needed.
-  - Review any `macro_rules!` using `$e:expr` for const or `_` ambiguity; switch to `expr_2021` only when needed.
-  - Review `if let` scrutinees that hold locks/borrows into an `else` block; bind temporaries before the `if let` if necessary.
-  - Ensure unsafe operations inside `unsafe fn` are wrapped in explicit `unsafe {}` blocks.
-  - If a workspace is introduced, set `[workspace] resolver = "3"` (edition 2024 implies this for top-level packages).
+### Rationale
+Moving to Edition 2024 unlocks modern language features and aligns with the stated target for the refactor.
 
-## 2) Align async runtime usage with pyo3-async-runtimes best practices
-**Files:** `src/api.rs`, `src/resolver.rs`, `tests/test_rust.rs`.
+### Scope
+- `Cargo.toml`: bump `edition = "2024"`.
+- `rust-toolchain.toml`: add a pinned toolchain (>= 1.89) to satisfy async-graphql's MSRV.
+- `src/**/*.rs`: apply any compiler-driven fixes required by the edition change.
 
-- [ ] Add a small runtime helper module (e.g., `src/runtime.rs`) to centralize:
-  - `future_into_py` (Rust future → Python awaitable).
-  - `into_future` (Python coroutine → Rust future).
-  - Error mapping from `PyErr` → `async_graphql::Error`.
-- [ ] Refactor `src/api.rs` to use the helper for all `future_into_py` calls (`SchemaWrapper.execute`, `SubscriptionStream.__anext__`, `SubscriptionStream.aclose`).
-- [ ] Refactor `src/resolver.rs` to use the helper for all `into_future` calls:
-  - Keep the awaitable check, but centralize it in a helper to remove manual duplication.
-  - Ensure `__anext__` awaitables and resolver coroutines are always passed through `into_future` as per docs.
-- [ ] Update tests in `tests/test_rust.rs` (if needed) to use the same helper or `pyo3_async_runtimes::tokio::run` consistently, avoiding tokio macros.
+### Implementation Notes
+- Run `cargo fix --edition` and address any edition-specific warnings (keyword_idents_2024, `unsafe` in `unsafe fn`, etc.).
+- Re-run `cargo check` after edits to confirm no new lint failures.
 
-## 3) Shift resolver assumptions to Python (less defensive Rust)
-**Files:** `grommet/resolver.py`, `grommet/schema.py`, `grommet/decorators.py`, `grommet/errors.py`, `src/resolver.rs`, `src/api.rs`, tests.
+### Impact
+- Consistent compiler behavior across environments.
+- Cleaner baseline for the rest of the refactor.
 
-- [ ] Add Python-side validation errors (e.g., `resolver_requires_async`, `subscription_requires_async_iterator`).
-- [ ] Enforce async-only resolvers in Python:
-  - Query/mutation/interface resolvers must be `inspect.iscoroutinefunction`.
-  - Subscription resolvers must be async generators or coroutine functions returning `AsyncIterator`.
-- [ ] Update `_wrap_resolver` to remove per-call `inspect.isawaitable` checks and always `await` async resolvers (or return async generators directly).
-- [ ] Pass resolver kind from `schema._build_schema_definition` so `_wrap_resolver` can enforce the correct async contract.
-- [ ] Simplify Rust resolver paths:
-  - Remove `is_awaitable` checks and assume resolver values are awaitable.
-  - Drop `__await__` validation in subscription streaming and rely on Python-side enforcement.
-  - Assume subscription resolvers return async iterators; remove `__aiter__`/`__anext__` fallback logic.
-- [ ] Update tests to cover Python-side validation errors and remove expectations of Rust-side defensive errors.
+## 2) Tokio 1.49 bump + feature trim [x]
 
-## 4) uvloop + asyncio.run compatibility
-**Files:** `README.md` (if present), Python-facing docs, and/or module docstrings.
+### Rationale
+Tokio is only used for the runtime builder and `tokio::sync::Mutex`, so the dependency can be modernized and kept lean.
 
-- [ ] Add a short “Event loop compatibility” section for Python users:
-  - Call `uvloop.install()` before creating/awaiting any Grommet futures.
-  - When using `asyncio.run`, call Grommet APIs inside the coroutine passed to `asyncio.run` (avoid “no running event loop”).
-- [ ] Ensure `configure_runtime` does not eagerly touch the Python event loop and is safe to call after uvloop is installed.
-- [ ] If needed, expose a lightweight hook in Python to set the event loop policy before any Rust async calls.
+### Scope
+- `Cargo.toml`: update `tokio` to `1.49` and drop the unused `macros` feature.
+- `src/api.rs`: keep `configure_runtime` behavior unchanged for now (still uses `builder.enable_all()`).
 
-## 5) Reduce manual Rust with PyO3 helper crates
-**Files:** `src/types.rs`, `src/parse.rs`, `Cargo.toml`.
+### Implementation Notes
+- Set `tokio = { version = "1.49", features = ["rt-multi-thread", "sync"] }`.
+- `rg "tokio::(main|test)"` confirms no macro usage; remove `macros` without further code changes.
+- If `cargo check` reports missing runtime features after the bump, re-add the minimum required Tokio features rather than reintroducing `macros`.
 
-- [ ] Evaluate `dict-derive` compatibility with PyO3 0.27.
-  - If compatible, add `dict_derive` dependency.
-  - If not, fall back to `#[derive(FromPyObject)]` with `#[pyo3(from_item_all)]` or `pyo3-serde`.
-- [ ] Introduce typed input structs for schema parsing (e.g., `SchemaDefInput`, `TypeDefInput`, `FieldDefInput`, `ArgDefInput`, `ScalarDefInput`, `EnumDefInput`, `UnionDefInput`).
-- [ ] Implement `FromPyObject` for `PyObj` so dict-derived structs can hold Python values without manual `.unbind()` calls.
-- [ ] Replace manual dict parsing in `src/parse.rs` with `.extract::<...>()` on the new structs and map missing-field errors to existing `missing_field(...)` errors.
-- [ ] Remove now-redundant parsing helpers (or keep thin wrappers if they preserve error semantics).
+### Impact
+- Updated Tokio version with a smaller feature set.
+- No behavioral change in runtime initialization.
 
-## 6) Conversion cost audit (PyO3)
-**Files:** `src/api.rs`, `src/parse.rs`, `src/values.rs`, `src/types.rs`.
+## 3) Centralize PyO3 async runtime interop [x]
 
-- [ ] Prefer Python-native types in PyO3 entrypoints and helpers when values are only forwarded/inspected (avoid converting to `String`/`Vec`/`HashMap` unless needed).
-- [ ] Use `#[derive(FromPyObject)]` with `#[pyo3(item)]` / `#[pyo3(from_item_all)]` for dict-based inputs to reduce manual conversions.
-- [ ] Consider `#[pyo3(transparent)]` newtypes for lightweight wrappers that can extract directly from the input object.
-- [ ] Keep conversions to Rust std types only when the data must outlive the GIL or be fed into async-graphql structures.
-- [ ] Ensure Python return values use zero-cost `Py<PyAny>`/`Bound<'py, PyAny>` handles where possible.
+### Rationale
+`future_into_py` and `into_future` calls are duplicated across `src/api.rs` and `src/resolver.rs`. A shared helper keeps error handling consistent and makes future upgrades safer.
 
-## 7) Verification
-**Commands:**
-- [ ] `cargo check`
-- [ ] `cargo test`
-- [ ] `uv run mypy .`
-- [ ] `uv run prek run -a`
+### Scope
+- New file: `src/runtime.rs`.
+- Update call sites in `src/api.rs`, `src/resolver.rs`, and `tests/test_rust.rs`.
+
+### Implementation Notes
+- Add helper functions such as:
+  - `future_into_py(py, fut)` wrapper around `pyo3_async_runtimes::tokio::future_into_py`.
+  - `into_future(py, awaitable)` wrapper around `pyo3_async_runtimes::tokio::into_future` with `PyErr -> async_graphql::Error` mapping.
+- Replace direct `pyo3_async_runtimes::tokio::*` usage in:
+  - `SchemaWrapper.execute`, `SubscriptionStream.__anext__`, `SubscriptionStream.aclose`.
+  - `resolve_python_value` and `subscription_stream` in `src/resolver.rs`.
+  - Any test helpers in `tests/test_rust.rs` that create futures from awaitables.
+
+### Impact
+- One consistent interop path and error conversion logic.
+- Easier to audit runtime usage after the Tokio bump.
+
+## 4) Enforce async-only resolver contracts in Python [x]
+
+### Rationale
+Resolver behavior is currently permissive (sync functions are allowed). Moving validation to Python makes the contract explicit and lets Rust assume awaited values.
+
+### Scope
+- `grommet/resolver.py`: update `_wrap_resolver` to enforce async-only resolvers.
+- `grommet/schema.py`: pass resolver kind to `_wrap_resolver`.
+- `grommet/errors.py`: add errors for non-async resolvers.
+- Tests: `tests/python/test_resolver_coverage.py`, `tests/python/test_subscriptions.py`, `tests/python/test_errors_coverage.py`.
+- Docs: `README.md` (Notes section).
+
+### Implementation Notes
+- Extend `_wrap_resolver` to accept a `kind: str` ("object"/"interface"/"subscription") and `field_name` for clearer errors.
+- Non-subscription resolvers:
+  - Require `inspect.iscoroutinefunction(resolver)`; raise `resolver_requires_async(...)` if not.
+  - Call `await resolver(**kwargs)` (drop `inspect.isawaitable` for this path).
+- Subscription resolvers:
+  - Allow `inspect.isasyncgenfunction(resolver)` **or** `inspect.iscoroutinefunction(resolver)`.
+  - If coroutine function, `await` it and return the resulting async iterator.
+  - If async generator function, return the generator object directly.
+- Update `_build_schema_definition` to pass the resolver kind into `_wrap_resolver` for correct enforcement.
+- Add error helpers in `grommet/errors.py` and update `tests/python/test_errors_coverage.py` to cover them.
+- Update `README.md` Notes section to say resolvers **must** be async (remove \"sync resolvers also work\").
+
+### Impact
+- Clear, enforceable async-only resolver contract.
+- Rust can assume resolver results are awaited.
+
+## 5) Simplify Rust resolver pipeline based on async-only contract [x]
+
+### Rationale
+Once Python enforces async-only resolvers, Rust no longer needs per-call awaitable checks for resolver paths.
+
+### Scope
+- `src/resolver.rs`: simplify resolver execution and subscription iteration.
+
+### Implementation Notes
+- Remove `is_awaitable` from `call_resolver` and `resolve_from_parent` return values.
+- In `resolve_python_value`:
+  - If `resolver` is present, always `await_value(...)`.
+  - If `resolver` is absent, return the parent/root value directly without checking `__await__`.
+- In `subscription_stream`, drop the explicit `__await__` check on `__anext__` results and call `into_future` directly.
+- Keep `subscription_iterator`'s `__aiter__`/`__anext__` validation, but remove any redundant awaitable checks.
+
+### Impact
+- Less branching and fewer Python attribute lookups on hot paths.
+- Behavior is clearer and aligned with the Python-side contract.
+
+## 6) Dict parsing refactor using PyO3 derives (no `dict-derive`) [x]
+
+### Rationale
+Manual dict parsing is verbose and error-prone. The `dict-derive` crate is not viable with our current PyO3 version, so we should use PyO3's built-in derives instead.
+
+### Decision (evaluated now)
+- `dict-derive` targets older PyO3 versions (docs/examples reference PyO3 0.22 APIs), while this project uses `pyo3 = 0.27.2`.
+- **Decision:** Do **not** adopt `dict-derive`. Use `#[derive(FromPyObject)]` with `#[pyo3(from_item_all)]` instead.
+
+### Scope
+- `src/types.rs` or `src/parse.rs`: add `*Input` structs that derive `FromPyObject` for schema/field/arg/scalar inputs.
+- `src/parse.rs`: replace manual dict extraction with `.extract::<...>()` + mapping into existing `SchemaDef`, `TypeDef`, etc.
+- Preserve error strings validated by `tests/test_rust.rs` (e.g., "Missing field name").
+
+### Implementation Notes
+- Define input structs (examples):
+  - `SchemaDefInput { schema: SchemaInput, types: Vec<TypeDefInput>, scalars: Option<Vec<ScalarDefInput>>, enums: Option<Vec<EnumDefInput>>, unions: Option<Vec<UnionDefInput>> }`
+  - `FieldDefInput`, `ArgDefInput`, `ScalarBindingInput`, etc.
+- Use `#[pyo3(from_item_all)]` so dict keys map to fields.
+- After extraction, validate required fields explicitly to preserve `missing_field(...)` error messages.
+- Map Python values to `PyObj` where needed to keep ownership semantics unchanged.
+
+### Impact
+- Significantly smaller parsing code with the same error surface.
+- Fewer manual `PyDict`/`PyList` manipulations.
+
+## 7) Documentation and runtime guidance [x]
+
+### Rationale
+Users need clear guidance on async-only resolvers and event loop setup.
+
+### Scope
+- `README.md`: update Notes section and add event loop guidance.
+- Optionally add a short note in `grommet/runtime.py` docstring.
+
+### Implementation Notes
+- Add a short \"Event loop compatibility\" note:
+  - Call `uvloop.install()` before creating/awaiting Grommet futures.
+  - Use `asyncio.run` by calling Grommet APIs inside the coroutine passed to it.
+
+### Impact
+- Clearer user-facing guidance on async contracts and loop configuration.
+
+## 8) Verification [x]
+
+### Commands
+- `cargo check`
+- `cargo test` (fails to link Python symbols in this environment)
+- `uv run mypy .`
+- `uv run prek run -a`
 
 ## Deliverables checklist
-- [ ] `Cargo.toml` updated to Edition 2024 + Tokio 1.49 + minimal features.
-- [ ] Runtime interop uses shared helpers consistent with pyo3-async-runtimes guidance.
-- [ ] Python-side resolver validation enforces async-only resolvers; Rust assumes awaitables.
-- [ ] uvloop/asyncio.run guidance documented for Python users.
-- [ ] Manual dict parsing reduced via `dict-derive` or `FromPyObject` derivations.
-- [ ] PyO3 conversion costs reduced by favoring Python-native types at boundaries.
-- [ ] Rust 2024 compatibility lints applied and any edition-specific behavior changes reviewed.
-- [ ] All checks pass.
+- [x] Edition bumped to 2024 with a pinned toolchain.
+- [x] Tokio bumped to 1.49 with `macros` removed.
+- [x] Runtime interop centralized in `src/runtime.rs`.
+- [x] Python enforces async-only resolvers; README updated accordingly.
+- [x] Rust resolver pipeline simplified to assume awaited resolver results.
+- [x] Dict parsing refactored with PyO3 derives (no `dict-derive`).
+- [x] Docs include event loop compatibility guidance.
+- [ ] All verification commands pass.

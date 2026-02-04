@@ -33,11 +33,11 @@ def test_wrap_resolver_missing_annotation_raises() -> None:
     Ensures resolver wrapping fails when required annotations are missing.
     """
 
-    def resolver(parent, info, value):
+    async def resolver(parent, info, value):  # type: ignore[no-untyped-def]
         return value
 
     with pytest.raises(GrommetTypeError):
-        _wrap_resolver(resolver)
+        _wrap_resolver(resolver, kind="object", field_name="value")
 
 
 @pytest.mark.anyio
@@ -46,10 +46,10 @@ async def test_wrap_resolver_info_context_root() -> None:
     Verifies wrapped resolvers receive coerced args and info/context/root.
     """
 
-    def resolver(parent, info, context, root, value: int) -> tuple:
+    async def resolver(parent, info, context, root, value: int) -> tuple:
         return (parent, info.field_name, context, root, value)
 
-    wrapper, arg_defs = _wrap_resolver(resolver)
+    wrapper, arg_defs = _wrap_resolver(resolver, kind="object", field_name="value")
     assert arg_defs[0]["name"] == "value"
 
     result = await wrapper(
@@ -64,9 +64,35 @@ async def test_wrap_resolver_without_info_and_missing_kwargs() -> None:
     Verifies wrapped resolvers use defaults when info kwargs are omitted.
     """
 
-    def resolver(parent, value: int = 5) -> tuple:
+    async def resolver(parent, value: int = 5) -> tuple:
         return (parent, value)
 
-    wrapper, _ = _wrap_resolver(resolver)
+    wrapper, _ = _wrap_resolver(resolver, kind="object", field_name="value")
     result = await wrapper("parent", {"field_name": "ignored"})
     assert result == ("parent", 5)
+
+
+def test_wrap_resolver_requires_async() -> None:
+    """
+    Ensures sync resolvers are rejected for non-subscription fields.
+    """
+
+    def resolver(parent, info) -> int:
+        return 1
+
+    with pytest.raises(GrommetTypeError):
+        _wrap_resolver(resolver, kind="object", field_name="value")
+
+
+@pytest.mark.anyio
+async def test_wrap_subscription_requires_async_iterator() -> None:
+    """
+    Ensures subscription resolvers must return async iterators.
+    """
+
+    async def resolver(parent, info) -> int:
+        return 3
+
+    wrapper, _ = _wrap_resolver(resolver, kind="subscription", field_name="ticks")
+    with pytest.raises(GrommetTypeError):
+        await wrapper("parent", {"field_name": "ticks"})

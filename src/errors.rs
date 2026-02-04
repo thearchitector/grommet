@@ -1,6 +1,6 @@
 use async_graphql::Error;
-use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::PyErr;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 
 pub(crate) fn py_err_to_error(err: PyErr) -> Error {
     Error::new(err.to_string())

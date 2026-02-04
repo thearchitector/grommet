@@ -2,7 +2,7 @@
 
 High performance Python GraphQL server library inspired by [Strawberry](https://strawberry.rocks/) and backed by [async-graphql](https://async-graphql.github.io/async-graphql/en/index.html).
 
-This is an experiment in a nearly 100% AI-written project. I provide guidelines and design guidance through review of the generated code and curated revision plans, but AI does the heavy lifting (until I run out of credits).
+This is an experiment in a nearly 100% AI-written project. I provide guidelines and design guidance through review of the generated code and curated revision plans, but AI does the heavy lifting. Features are developed as my token and usage counts reset.
 
 ## Example
 
@@ -96,7 +96,7 @@ async def get_user(parent, info, user: UserInput) -> User:
 
 ## Notes
 
-- Resolvers are async-first; sync resolvers also work.
+- Resolvers must be async.
 - Field arguments are derived from resolver type annotations.
 - Input types must be marked with `@gm.input`.
 - Use `Schema.sdl()` to inspect the generated schema.
@@ -109,6 +109,11 @@ async def get_user(parent, info, user: UserInput) -> User:
 # Configure the Tokio runtime before creating schemas.
 gm.configure_runtime(use_current_thread=True)
 ```
+
+## Event Loop Compatibility
+
+- Call `uvloop.install()` before creating or awaiting Grommet futures.
+- When using `asyncio.run`, create schemas and call Grommet APIs inside the coroutine passed to `asyncio.run`.
 
 ## Benchmarks
 

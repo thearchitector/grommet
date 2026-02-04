@@ -118,7 +118,9 @@ def _build_schema_definition(
                 resolver_key = None
                 args_def: list[dict[str, "Any"]] = []
                 if field_meta.resolver is not None:
-                    wrapper, args_def = _wrap_resolver(field_meta.resolver)
+                    wrapper, args_def = _wrap_resolver(
+                        field_meta.resolver, kind=type_kind, field_name=field_name
+                    )
                     if not is_interface:
                         resolver_key = f"{meta.name}.{field_name}"
                         resolvers[resolver_key] = wrapper

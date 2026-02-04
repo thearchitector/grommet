@@ -2,9 +2,9 @@ use std::collections::HashSet;
 
 use async_graphql::dynamic::{FieldValue, ResolverContext, TypeRef, ValueAccessor};
 use async_graphql::{Name, Value};
+use pyo3::IntoPyObject;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyBytes, PyDict, PyList, PyTuple};
-use pyo3::IntoPyObject;
 
 use crate::errors::{
     abstract_type_requires_object, expected_list_value, py_value_error, unsupported_value_type,
