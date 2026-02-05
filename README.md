@@ -7,8 +7,6 @@ High performance async Python GraphQL server library inspired by [Strawberry](ht
 
 This is an experiment in a nearly 100% AI-written project. I provide guidelines and design guidance through review of the generated code and curated revision plans, but AI does the heavy lifting. Features are developed as my token and usage counts reset.
 
-<!-- <AI_GENERATED> -->
-
 ## Quick Start
 
 ### Installation
@@ -20,6 +18,8 @@ uv add grommet
 ```
 
 ### Examples
+
+<!-- <AI_GENERATED> -->
 
 Define your GraphQL types as decorated dataclasses, build a schema, and execute queries:
 
@@ -59,6 +59,18 @@ result = asyncio.run(schema.execute('{ hello(name: "grommet") }'))
 print(result)  # {'data': {'hello': 'Hello, grommet!'}}
 ```
 
+Reference the resolution parent and info in resolvers through the `parent` and `info` arguments:
+
+```python
+@grommet.type
+@dataclass
+class Query:
+    @grommet.field
+    @staticmethod
+    async def hello(parent: "Query", info: gm.Info) -> str:
+        return f"Hello, {name}!"
+```
+
 Add mutations by defining a separate mutation type:
 
 ```python
@@ -67,12 +79,19 @@ Add mutations by defining a separate mutation type:
 class AddUserInput:
     name: str
     email: str
+    title: str | None = None
 
 @grommet.type
 @dataclass
 class User:
     name: str
     email: str
+    title: str | None
+
+    @grommet.field
+    @staticmethod
+    async def full_name(parent: "User", info: gm.Info) -> str:
+        return f"{parent.title} {parent.name}" if parent.title else parent.name
 
 @grommet.type
 @dataclass
@@ -80,7 +99,7 @@ class Mutation:
     @grommet.field
     @staticmethod
     async def add_user(input: AddUserInput) -> User:
-        return User(name=input.name, email=input.email)
+        return User(name=input.name, email=input.email, title=input.title)
 
 schema = grommet.Schema(query=Query, mutation=Mutation)
 ```
