@@ -25,7 +25,7 @@ perf = [
 ]
 
 [tool.pytest.ini_options]
-addopts = '-ra -vv --cov=grommet'
+addopts = '-ra -vv --cov=grommet --cov-report=term-missing'
 testpaths = ["tests/python"]
 
 [tool.coverage.run]

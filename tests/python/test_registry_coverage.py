@@ -1,3 +1,4 @@
+import dataclasses
 import enum
 from dataclasses import dataclass
 from typing import AsyncIterator as TypingAsyncIterator
@@ -6,14 +7,9 @@ from typing import List
 import pytest
 
 import grommet as gm
+from grommet.annotations import walk_annotation
 from grommet.errors import GrommetTypeError
-from grommet.registry import (
-    _iter_enum_refs,
-    _iter_scalar_refs,
-    _iter_type_refs,
-    _iter_union_refs,
-    _traverse_schema,
-)
+from grommet.registry import _get_field_meta, _traverse_schema
 
 
 @gm.scalar(serialize=lambda value: value, parse_value=lambda value: value)
@@ -74,30 +70,53 @@ def test_traverse_schema_union_already_registered() -> None:
     assert RegistryUnion in result.unions
 
 
-def test_iter_refs_handle_async_iterable_and_list_errors() -> None:
+def test_walk_annotation_handles_async_iterable_and_list_errors() -> None:
     """
-    Ensures reference iterators ignore async iterables and reject raw lists.
+    Ensures walk_annotation ignores bare async iterables and rejects raw lists.
     """
-    assert _iter_type_refs(TypingAsyncIterator) == []
-    assert _iter_scalar_refs(TypingAsyncIterator) == []
-    assert _iter_enum_refs(TypingAsyncIterator) == []
-    assert _iter_union_refs(TypingAsyncIterator) == []
+    assert list(walk_annotation(TypingAsyncIterator)) == []
 
     with pytest.raises(GrommetTypeError):
-        _iter_type_refs(List)
-    with pytest.raises(GrommetTypeError):
-        _iter_scalar_refs(List)
-    with pytest.raises(GrommetTypeError):
-        _iter_enum_refs(List)
-    with pytest.raises(GrommetTypeError):
-        _iter_union_refs(List)
+        list(walk_annotation(List))
 
 
-def test_iter_refs_return_types() -> None:
+def test_walk_annotation_returns_types() -> None:
     """
-    Verifies reference iterators return expected types for list annotations.
+    Verifies walk_annotation returns expected (kind, type) tuples for list annotations.
     """
-    assert _iter_type_refs(list[Obj]) == [Obj]
-    assert _iter_scalar_refs(list[CustomScalar]) == [CustomScalar]
-    assert _iter_enum_refs(list[Status]) == [Status]
-    assert _iter_union_refs(list[RegistryUnion]) == [RegistryUnion]
+    assert list(walk_annotation(list[Obj])) == [("type", Obj)]
+    assert list(walk_annotation(list[CustomScalar])) == [("scalar", CustomScalar)]
+    assert list(walk_annotation(list[Status])) == [("enum", Status)]
+    assert list(walk_annotation(list[RegistryUnion])) == [("union", RegistryUnion)]
+
+
+def test_traverse_schema_tracks_resolver_arg_annotations() -> None:
+    """Test that resolver argument annotations are tracked."""
+
+    @gm.type
+    @dataclass
+    class QueryWithResolverArgs:
+        @gm.field
+        @staticmethod
+        async def search(status: Status, scalar: CustomScalar) -> str:
+            return "result"
+
+    result = _traverse_schema([QueryWithResolverArgs])
+
+    enum_names = {meta.name for meta in result.enums.values()}
+    scalar_names = {meta.name for meta in result.scalars.values()}
+
+    assert "Status" in enum_names
+    assert "CustomScalar" in scalar_names
+
+
+def test_get_field_meta_returns_default_when_no_metadata() -> None:
+    """Test _get_field_meta returns default FieldMeta when no grommet metadata."""
+
+    @dataclass
+    class PlainDataclass:
+        value: int
+
+    dc_field = next(iter(dataclasses.fields(PlainDataclass)))
+    meta = _get_field_meta(dc_field)
+    assert meta.resolver is None

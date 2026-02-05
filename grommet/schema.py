@@ -1,16 +1,10 @@
-import dataclasses
 from builtins import type as pytype
 from typing import TYPE_CHECKING
 
 from . import _core
-from .annotations import is_internal_field, unwrap_async_iterable
-from .coercion import _input_field_default
 from .errors import schema_requires_query, unknown_type_kind
-from .metadata import MISSING, EnumMeta, ScalarMeta, TypeMeta, UnionMeta
-from .registry import _get_field_meta, _traverse_schema
+from .plan import _NO_DEFAULT, SchemaPlan, build_schema_plan
 from .resolver import _wrap_resolver
-from .typespec import _get_type_meta, _type_spec_from_annotation
-from .typing_utils import _get_type_hints
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -36,21 +30,10 @@ class Schema:
     ) -> None:
         if query is None:
             raise schema_requires_query()
-        entrypoints = [query, mutation, subscription]
-        traversal = _traverse_schema(entrypoints)
-        registry = traversal.types
-        scalar_registry = traversal.scalars
-        enum_registry = traversal.enums
-        union_registry = traversal.unions
-        definition, resolvers, scalar_bindings = _build_schema_definition(
-            query=query,
-            mutation=mutation,
-            subscription=subscription,
-            registry=registry,
-            scalars=scalar_registry,
-            enums=enum_registry,
-            unions=union_registry,
+        plan = build_schema_plan(
+            query=query, mutation=mutation, subscription=subscription
         )
+        definition, resolvers, scalar_bindings = _build_schema_definition(plan)
         self._core = _core.Schema(definition, resolvers, scalar_bindings)
 
     async def execute(
@@ -79,154 +62,119 @@ class Schema:
 
 
 def _build_schema_definition(
-    *,
-    query: pytype,
-    mutation: pytype | None,
-    subscription: pytype | None,
-    registry: dict[pytype, TypeMeta],
-    scalars: dict[pytype, ScalarMeta],
-    enums: dict[pytype, EnumMeta],
-    unions: dict[pytype, UnionMeta],
+    plan: SchemaPlan,
 ) -> "tuple[dict[str, Any], dict[str, Callable[..., Any]], list[dict[str, Any]]]":
+    """Convert a SchemaPlan to the dict format expected by Rust."""
     types_def: list[dict[str, "Any"]] = []
     resolvers: dict[str, "Callable[..., Any]"] = {}
-    type_meta_cache = registry
 
-    def type_name(tp: pytype) -> str:
-        meta = type_meta_cache.get(tp)
-        if meta is None:
-            meta = _get_type_meta(tp)
-            type_meta_cache[tp] = meta
-        return meta.name
-
-    def maybe_type_name(tp: pytype | None) -> str | None:
-        if tp is None:
-            return None
-        return type_name(tp)
-
-    for cls, meta in registry.items():
-        if meta.kind in ("object", "interface"):
-            is_interface = meta.kind == "interface"
-            type_kind = (
-                "subscription"
-                if subscription is not None and cls is subscription
-                else meta.kind
-            )
+    for type_plan in plan.types:
+        if type_plan.kind in ("object", "interface", "subscription"):
+            is_interface = type_plan.kind == "interface"
             fields_def: list[dict[str, "Any"]] = []
-            hints = _get_type_hints(cls)
-            for dc_field in dataclasses.fields(cls):
-                field_meta = _get_field_meta(dc_field)
-                field_name = field_meta.name or dc_field.name
-                annotation = hints.get(dc_field.name, dc_field.type)
-                if is_internal_field(dc_field.name, annotation):
-                    # keep internal fields on the class but skip them in the schema
-                    continue
-                force_nullable = dc_field.default is None
-                if type_kind == "subscription" and field_meta.resolver is not None:
-                    annotation, iterator_optional = unwrap_async_iterable(annotation)
-                    force_nullable = force_nullable or iterator_optional
-                gql_type = _type_spec_from_annotation(
-                    annotation, expect_input=False, force_nullable=force_nullable
-                ).to_graphql()
+
+            for field_plan in type_plan.fields:
                 resolver_key = None
                 args_def: list[dict[str, "Any"]] = []
-                if field_meta.resolver is not None:
+
+                if field_plan.resolver is not None and not is_interface:
                     wrapper, args_def = _wrap_resolver(
-                        field_meta.resolver, kind=type_kind, field_name=field_name
+                        field_plan.resolver,
+                        kind=type_plan.kind,
+                        field_name=field_plan.name,
                     )
-                    if not is_interface:
-                        resolver_key = f"{meta.name}.{field_name}"
-                        resolvers[resolver_key] = wrapper
+                    resolver_key = f"{type_plan.name}.{field_plan.name}"
+                    resolvers[resolver_key] = wrapper
+                elif field_plan.resolver is not None:
+                    _, args_def = _wrap_resolver(
+                        field_plan.resolver,
+                        kind=type_plan.kind,
+                        field_name=field_plan.name,
+                    )
+
                 fields_def.append(
                     {
-                        "name": field_name,
-                        "source": dc_field.name,
-                        "type": gql_type,
+                        "name": field_plan.name,
+                        "source": field_plan.source,
+                        "type": field_plan.graphql_type,
                         "args": args_def,
                         "resolver": resolver_key,
-                        "description": field_meta.description,
-                        "deprecation": field_meta.deprecation_reason,
+                        "description": field_plan.description,
+                        "deprecation": field_plan.deprecation,
                     }
                 )
+
             types_def.append(
                 {
-                    "kind": type_kind,
-                    "name": meta.name,
+                    "kind": type_plan.kind,
+                    "name": type_plan.name,
                     "fields": fields_def,
-                    "description": meta.description,
-                    "implements": [type_name(iface) for iface in meta.implements],
+                    "description": type_plan.description,
+                    "implements": list(type_plan.implements),
                 }
             )
-        elif meta.kind == "input":
+        elif type_plan.kind == "input":
             input_fields_def: list[dict[str, "Any"]] = []
-            hints = _get_type_hints(cls)
-            for dc_field in dataclasses.fields(cls):
-                annotation = hints.get(dc_field.name, dc_field.type)
-                if is_internal_field(dc_field.name, annotation):
-                    # keep internal inputs for python use but skip graphql exposure
-                    continue
-                force_nullable = (
-                    dc_field.default is not MISSING
-                    or dc_field.default_factory is not MISSING
-                )
-                gql_type = _type_spec_from_annotation(
-                    annotation, expect_input=True, force_nullable=force_nullable
-                ).to_graphql()
-                field_def: dict[str, "Any"] = {"name": dc_field.name, "type": gql_type}
-                default_value = _input_field_default(dc_field, annotation)
-                if default_value is not MISSING:
-                    field_def["default"] = default_value
+
+            for field_plan in type_plan.fields:
+                field_def: dict[str, "Any"] = {
+                    "name": field_plan.name,
+                    "type": field_plan.graphql_type,
+                }
+                if field_plan.default is not _NO_DEFAULT:
+                    field_def["default"] = field_plan.default
                 input_fields_def.append(field_def)
+
             types_def.append(
                 {
                     "kind": "input",
-                    "name": meta.name,
+                    "name": type_plan.name,
                     "fields": input_fields_def,
-                    "description": meta.description,
+                    "description": type_plan.description,
                 }
             )
         else:
-            raise unknown_type_kind(meta.kind)
+            raise unknown_type_kind(type_plan.kind)
 
     schema_def = {
         "schema": {
-            "query": type_name(query),
-            "mutation": maybe_type_name(mutation),
-            "subscription": maybe_type_name(subscription),
+            "query": plan.query,
+            "mutation": plan.mutation,
+            "subscription": plan.subscription,
         },
         "types": types_def,
         "scalars": [
             {
-                "name": meta.name,
-                "description": meta.description,
-                "specified_by_url": meta.specified_by_url,
+                "name": scalar_plan.meta.name,
+                "description": scalar_plan.meta.description,
+                "specified_by_url": scalar_plan.meta.specified_by_url,
             }
-            for meta in scalars.values()
+            for scalar_plan in plan.scalars
         ],
         "enums": [
             {
-                "name": meta.name,
-                "description": meta.description,
-                "values": list(getattr(enum_type, "__members__", {}).keys()),
+                "name": enum_plan.meta.name,
+                "description": enum_plan.meta.description,
+                "values": list(getattr(enum_plan.cls, "__members__", {}).keys()),
             }
-            for enum_type, meta in enums.items()
+            for enum_plan in plan.enums
         ],
         "unions": [
             {
-                "name": meta.name,
-                "description": meta.description,
-                "types": [type_name(tp) for tp in meta.types],
+                "name": union_plan.meta.name,
+                "description": union_plan.meta.description,
+                "types": [t.__grommet_meta__.name for t in union_plan.meta.types],  # type: ignore[attr-defined]
             }
-            for meta in unions.values()
+            for union_plan in plan.unions
         ],
     }
     scalar_bindings = [
         {
-            "name": meta.name,
-            "python_type": scalar_type,
-            "serialize": meta.serialize,
-            "parse_value": meta.parse_value,
+            "name": scalar_plan.meta.name,
+            "python_type": scalar_plan.cls,
+            "serialize": scalar_plan.meta.serialize,
+            "parse_value": scalar_plan.meta.parse_value,
         }
-        for scalar_type, meta in scalars.items()
+        for scalar_plan in plan.scalars
     ]
     return schema_def, resolvers, scalar_bindings

@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -7,10 +8,14 @@ use async_graphql::dynamic::{
 };
 use pyo3::prelude::*;
 
+thread_local! {
+    static TYPE_REF_CACHE: RefCell<HashMap<String, TypeRef>> = RefCell::new(HashMap::new());
+}
+
 use crate::errors::{py_value_error, unknown_type_kind};
 use crate::resolver::{resolve_field, resolve_subscription_stream};
 use crate::types::{
-    EnumDef, FieldDef, PyObj, ScalarBinding, ScalarDef, SchemaDef, TypeDef, UnionDef,
+    EnumDef, FieldContext, FieldDef, PyObj, ScalarBinding, ScalarDef, SchemaDef, TypeDef, UnionDef,
 };
 use crate::values::pyobj_to_value;
 
@@ -146,45 +151,47 @@ pub(crate) fn build_schema(
         .map_err(|err| py_value_error(err.to_string()))
 }
 
+fn build_field_context(
+    field_def: &FieldDef,
+    resolver_map: &HashMap<String, PyObj>,
+    scalar_bindings: Arc<Vec<ScalarBinding>>,
+    abstract_types: Arc<HashSet<String>>,
+) -> Arc<FieldContext> {
+    let resolver = field_def
+        .resolver
+        .as_ref()
+        .and_then(|key| resolver_map.get(key).cloned());
+    let arg_names: Vec<String> = field_def.args.iter().map(|arg| arg.name.clone()).collect();
+    let type_ref = parse_type_ref(field_def.type_name.as_str());
+
+    Arc::new(FieldContext {
+        resolver,
+        arg_names,
+        field_name: field_def.name.clone(),
+        source_name: field_def.source.clone(),
+        output_type: type_ref,
+        scalar_bindings,
+        abstract_types,
+    })
+}
+
 fn build_field(
     field_def: FieldDef,
     resolver_map: &HashMap<String, PyObj>,
     scalar_bindings: Arc<Vec<ScalarBinding>>,
     abstract_types: Arc<HashSet<String>>,
 ) -> PyResult<Field> {
-    let resolver = field_def
-        .resolver
-        .as_ref()
-        .and_then(|key| resolver_map.get(key).cloned());
-    let arg_names: Arc<Vec<String>> =
-        Arc::new(field_def.args.iter().map(|arg| arg.name.clone()).collect());
-    let field_name = Arc::new(field_def.name.clone());
-    let source_name = Arc::new(field_def.source.clone());
-    let type_ref = parse_type_ref(field_def.type_name.as_str());
-    let output_type = type_ref.clone();
+    let field_ctx = build_field_context(
+        &field_def,
+        resolver_map,
+        scalar_bindings.clone(),
+        abstract_types,
+    );
+    let type_ref = field_ctx.output_type.clone();
 
-    let scalars = scalar_bindings.clone();
     let mut field = Field::new(field_def.name, type_ref, move |ctx| {
-        let scalars = scalars.clone();
-        let resolver = resolver.clone();
-        let arg_names = arg_names.clone();
-        let field_name = field_name.clone();
-        let source_name = source_name.clone();
-        let output_type = output_type.clone();
-        let abstract_types = abstract_types.clone();
-        FieldFuture::new(async move {
-            resolve_field(
-                ctx,
-                resolver,
-                arg_names,
-                field_name,
-                source_name,
-                scalars,
-                output_type,
-                abstract_types,
-            )
-            .await
-        })
+        let field_ctx = field_ctx.clone();
+        FieldFuture::new(async move { resolve_field(ctx, field_ctx).await })
     });
 
     for arg_def in field_def.args {
@@ -235,39 +242,19 @@ fn build_subscription_field(
     scalar_bindings: Arc<Vec<ScalarBinding>>,
     abstract_types: Arc<HashSet<String>>,
 ) -> PyResult<SubscriptionField> {
-    let resolver = field_def
-        .resolver
-        .as_ref()
-        .and_then(|key| resolver_map.get(key).cloned());
-    let arg_names: Arc<Vec<String>> =
-        Arc::new(field_def.args.iter().map(|arg| arg.name.clone()).collect());
-    let field_name = Arc::new(field_def.name.clone());
-    let source_name = Arc::new(field_def.source.clone());
-    let type_ref = parse_type_ref(field_def.type_name.as_str());
-    let output_type = type_ref.clone();
+    let field_ctx = build_field_context(
+        &field_def,
+        resolver_map,
+        scalar_bindings.clone(),
+        abstract_types,
+    );
+    let type_ref = field_ctx.output_type.clone();
 
-    let scalars = scalar_bindings.clone();
     let mut field = SubscriptionField::new(field_def.name, type_ref, move |ctx| {
-        let scalars = scalars.clone();
-        let resolver = resolver.clone();
-        let arg_names = arg_names.clone();
-        let field_name = field_name.clone();
-        let source_name = source_name.clone();
-        let output_type = output_type.clone();
-        let abstract_types = abstract_types.clone();
-        SubscriptionFieldFuture::new(async move {
-            resolve_subscription_stream(
-                ctx,
-                resolver,
-                arg_names,
-                field_name,
-                source_name,
-                scalars,
-                output_type,
-                abstract_types,
-            )
-            .await
-        })
+        let field_ctx = field_ctx.clone();
+        SubscriptionFieldFuture::new(
+            async move { resolve_subscription_stream(ctx, field_ctx).await },
+        )
     });
 
     for arg_def in field_def.args {
@@ -302,6 +289,18 @@ fn build_input_field(
 }
 
 fn parse_type_ref(type_name: &str) -> TypeRef {
+    TYPE_REF_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(cached) = cache.get(type_name) {
+            return cached.clone();
+        }
+        let parsed = parse_type_ref_uncached(type_name);
+        cache.insert(type_name.to_string(), parsed.clone());
+        parsed
+    })
+}
+
+fn parse_type_ref_uncached(type_name: &str) -> TypeRef {
     let mut name = type_name.trim();
     let mut non_null = false;
     if name.ends_with('!') {
@@ -310,7 +309,8 @@ fn parse_type_ref(type_name: &str) -> TypeRef {
     }
     let ty = if name.starts_with('[') && name.ends_with(']') {
         let inner = &name[1..name.len() - 1];
-        let inner_ref = parse_type_ref(inner);
+        // Use uncached recursive call to avoid RefCell re-borrow
+        let inner_ref = parse_type_ref_uncached(inner);
         TypeRef::List(Box::new(inner_ref))
     } else {
         TypeRef::named(name)

@@ -1,8 +1,18 @@
+from functools import partial
+from typing import AsyncIterator
+
 import pytest
 
 from grommet.errors import GrommetTypeError
 from grommet.info import Info
-from grommet.resolver import _normalize_info, _wrap_resolver
+from grommet.resolver import (
+    _is_asyncgen_callable,
+    _is_coroutine_callable,
+    _normalize_info,
+    _resolver_name,
+    _resolver_params,
+    _wrap_resolver,
+)
 
 
 def test_normalize_info_variants() -> None:
@@ -96,3 +106,96 @@ async def test_wrap_subscription_requires_async_iterator() -> None:
     wrapper, _ = _wrap_resolver(resolver, kind="subscription", field_name="ticks")
     with pytest.raises(GrommetTypeError):
         await wrapper("parent", {"field_name": "ticks"})
+
+
+def test_resolver_params_handles_unhashable_callable() -> None:
+    """Test _resolver_params handles callables that can't be cached."""
+
+    class UnhashableCallable:
+        __hash__ = None  # type: ignore[assignment]
+
+        def __call__(self, x: int) -> int:
+            return x
+
+    callable_obj = UnhashableCallable()
+    params = _resolver_params(callable_obj)
+    assert len(params) == 1
+    assert params[0].name == "x"
+
+
+def test_resolver_name_fallback_to_type_name() -> None:
+    """Test _resolver_name falls back to type name when no __name__."""
+
+    class CallableWithoutName:
+        def __call__(self) -> None:
+            pass
+
+    obj = CallableWithoutName()
+    delattr(obj.__class__, "__name__") if hasattr(obj, "__name__") else None
+    name = _resolver_name(obj)
+    assert name == "CallableWithoutName"
+
+
+def test_resolver_name_uses_func_attr() -> None:
+    """Test _resolver_name uses .func attribute when available."""
+
+    async def my_resolver() -> int:
+        return 42
+
+    partial_resolver = partial(my_resolver)
+    name = _resolver_name(partial_resolver)
+    assert name == "my_resolver"
+
+
+def test_is_coroutine_callable_with_func_attr() -> None:
+    """Test _is_coroutine_callable checks .func attribute."""
+
+    async def async_func() -> int:
+        return 1
+
+    partial_func = partial(async_func)
+    assert _is_coroutine_callable(partial_func) is True
+
+    def sync_func() -> int:
+        return 1
+
+    partial_sync = partial(sync_func)
+    assert _is_coroutine_callable(partial_sync) is False
+
+
+def test_is_asyncgen_callable_with_func_attr() -> None:
+    """Test _is_asyncgen_callable checks .func attribute."""
+
+    async def async_gen() -> AsyncIterator[int]:
+        yield 1
+
+    partial_gen = partial(async_gen)
+    assert _is_asyncgen_callable(partial_gen) is True
+
+
+def test_wrap_resolver_subscription_asyncgen_path() -> None:
+    """Test _wrap_resolver handles subscription with async generator."""
+
+    async def subscription_gen(parent: None) -> AsyncIterator[int]:
+        yield 1
+        yield 2
+
+    wrapper, arg_defs = _wrap_resolver(
+        subscription_gen, kind="subscription", field_name="events"
+    )
+    assert arg_defs == []
+
+
+def test_wrap_resolver_subscription_coroutine_path() -> None:
+    """Test _wrap_resolver handles subscription with coroutine returning iterator."""
+
+    async def subscription_coro(parent: None) -> AsyncIterator[int]:
+        async def gen() -> AsyncIterator[int]:
+            yield 1
+
+        return gen()
+
+    wrapper, arg_defs = _wrap_resolver(
+        subscription_coro, kind="subscription", field_name="events"
+    )
+    assert arg_defs == []

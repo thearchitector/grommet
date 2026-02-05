@@ -10,3 +10,14 @@ def test_get_type_hints_cached() -> None:
     second = _get_type_hints(Example)
     assert first == second
     assert first["foo"] is int
+
+
+def test_get_type_hints_handles_unhashable_type() -> None:
+    """Test _get_type_hints handles types that can't be cached."""
+
+    class UnhashableClass:
+        __hash__ = None  # type: ignore[assignment]
+        value: int
+
+    hints = _get_type_hints(UnhashableClass)
+    assert "value" in hints

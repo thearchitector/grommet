@@ -53,6 +53,10 @@ fn scalar_binding_for_value<'a>(
     value: &Bound<'_, PyAny>,
     scalar_bindings: &'a [ScalarBinding],
 ) -> PyResult<Option<&'a ScalarBinding>> {
+    // Short-circuit for built-in types that are never custom scalars
+    if is_builtin_type(value) {
+        return Ok(None);
+    }
     for binding in scalar_bindings {
         let py_type = binding.py_type.bind(py);
         let is_instance = value.is_instance(&py_type)?;
@@ -61,6 +65,18 @@ fn scalar_binding_for_value<'a>(
         }
     }
     Ok(None)
+}
+
+#[inline]
+fn is_builtin_type(value: &Bound<'_, PyAny>) -> bool {
+    value.is_none()
+        || value.is_instance_of::<pyo3::types::PyBool>()
+        || value.is_instance_of::<pyo3::types::PyInt>()
+        || value.is_instance_of::<pyo3::types::PyFloat>()
+        || value.is_instance_of::<pyo3::types::PyString>()
+        || value.is_instance_of::<PyList>()
+        || value.is_instance_of::<PyTuple>()
+        || value.is_instance_of::<PyDict>()
 }
 
 fn meta_type_value(ty: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
@@ -135,33 +151,7 @@ pub(crate) fn py_to_field_value_for_type(
             py_to_field_value_for_type(py, value, inner, scalar_bindings, abstract_types)
         }
         TypeRef::List(inner) => {
-            if let Ok(seq) = value.cast::<PyList>() {
-                let mut items = Vec::with_capacity(seq.len());
-                for item in seq.iter() {
-                    items.push(py_to_field_value_for_type(
-                        py,
-                        &item,
-                        inner,
-                        scalar_bindings,
-                        abstract_types,
-                    )?);
-                }
-                Ok(FieldValue::list(items))
-            } else if let Ok(seq) = value.cast::<PyTuple>() {
-                let mut items = Vec::with_capacity(seq.len());
-                for item in seq.iter() {
-                    items.push(py_to_field_value_for_type(
-                        py,
-                        &item,
-                        inner,
-                        scalar_bindings,
-                        abstract_types,
-                    )?);
-                }
-                Ok(FieldValue::list(items))
-            } else {
-                Err(expected_list_value())
-            }
+            convert_sequence_to_field_values(py, value, inner, scalar_bindings, abstract_types)
         }
         TypeRef::Named(name) => {
             if abstract_types.contains(name.as_ref()) {
@@ -205,21 +195,68 @@ fn py_to_field_value(
     if let Ok(s) = value.extract::<String>() {
         return Ok(FieldValue::value(Value::String(s)));
     }
+    if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
+        return convert_sequence_to_field_values_untyped(py, value, scalar_bindings);
+    }
+    Ok(FieldValue::owned_any(PyObj::new(value.clone().unbind())))
+}
+
+fn convert_sequence_to_field_values(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    inner_type: &TypeRef,
+    scalar_bindings: &[ScalarBinding],
+    abstract_types: &HashSet<String>,
+) -> PyResult<FieldValue<'static>> {
+    if let Ok(seq) = value.cast::<PyList>() {
+        let mut items = Vec::with_capacity(seq.len());
+        for item in seq.iter() {
+            items.push(py_to_field_value_for_type(
+                py,
+                &item,
+                inner_type,
+                scalar_bindings,
+                abstract_types,
+            )?);
+        }
+        Ok(FieldValue::list(items))
+    } else if let Ok(seq) = value.cast::<PyTuple>() {
+        let mut items = Vec::with_capacity(seq.len());
+        for item in seq.iter() {
+            items.push(py_to_field_value_for_type(
+                py,
+                &item,
+                inner_type,
+                scalar_bindings,
+                abstract_types,
+            )?);
+        }
+        Ok(FieldValue::list(items))
+    } else {
+        Err(expected_list_value())
+    }
+}
+
+fn convert_sequence_to_field_values_untyped(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    scalar_bindings: &[ScalarBinding],
+) -> PyResult<FieldValue<'static>> {
     if let Ok(seq) = value.cast::<PyList>() {
         let mut items = Vec::with_capacity(seq.len());
         for item in seq.iter() {
             items.push(py_to_field_value(py, &item, scalar_bindings)?);
         }
-        return Ok(FieldValue::list(items));
-    }
-    if let Ok(seq) = value.cast::<PyTuple>() {
+        Ok(FieldValue::list(items))
+    } else if let Ok(seq) = value.cast::<PyTuple>() {
         let mut items = Vec::with_capacity(seq.len());
         for item in seq.iter() {
             items.push(py_to_field_value(py, &item, scalar_bindings)?);
         }
-        return Ok(FieldValue::list(items));
+        Ok(FieldValue::list(items))
+    } else {
+        Err(expected_list_value())
     }
-    Ok(FieldValue::owned_any(PyObj::new(value.clone().unbind())))
 }
 
 pub(crate) fn py_to_value(

@@ -2,16 +2,25 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, ClassVar, get_args, get_origin
 
-from .errors import async_iterable_requires_parameter
-from .metadata import _INTERNAL_MARKER
+from .errors import async_iterable_requires_parameter, list_type_requires_parameter
+from .metadata import (
+    _INTERNAL_MARKER,
+    EnumMeta,
+    GrommetMetaType,
+    ScalarMeta,
+    TypeMeta,
+    UnionMeta,
+)
 
 if TYPE_CHECKING:
+    from builtins import type as pytype
+    from collections.abc import Iterator
     from typing import Any
 
 _NONE_TYPE = type(None)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AnnotationInfo:
     annotation: "Any"
     inner: "Any"
@@ -93,3 +102,44 @@ def is_internal_field(attr_name: str, annotation: "Any") -> bool:
         return True
     info = analyze_annotation(annotation)
     return info.is_internal or info.is_classvar
+
+
+def walk_annotation(annotation: "Any") -> "Iterator[tuple[str, pytype]]":
+    """
+    Yields (kind, pytype) tuples for all grommet types referenced in an annotation.
+
+    kind is one of: 'type', 'scalar', 'enum', 'union'.
+    Handles optional, list, and async-iterable wrappers.
+    """
+    info = analyze_annotation(annotation)
+    inner = info.async_item if info.is_async_iterable else info.inner
+    if inner is None:
+        return
+    yield from _walk_inner(inner)
+
+
+def _walk_inner(inner: "Any") -> "Iterator[tuple[str, pytype]]":
+    """Recursively walk an unwrapped inner type."""
+    info = analyze_annotation(inner)
+    if info.is_list:
+        if info.list_item is None:
+            raise list_type_requires_parameter()
+        yield from _walk_inner(info.list_item)
+        return
+
+    meta = getattr(inner, "__grommet_meta__", None)
+    if meta is None:
+        return
+
+    if isinstance(meta, TypeMeta) and meta.type in (
+        GrommetMetaType.TYPE,
+        GrommetMetaType.INTERFACE,
+        GrommetMetaType.INPUT,
+    ):
+        yield ("type", inner)
+    elif isinstance(meta, ScalarMeta):
+        yield ("scalar", inner)
+    elif isinstance(meta, EnumMeta):
+        yield ("enum", inner)
+    elif isinstance(meta, UnionMeta):
+        yield ("union", inner)

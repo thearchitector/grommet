@@ -10,27 +10,28 @@ use pyo3_async_runtimes::tokio;
 
 use crate::errors::{no_parent_value, py_err_to_error, subscription_requires_async_iterator};
 use crate::runtime::await_awaitable;
-use crate::types::{ContextValue, PyObj, RootValue, ScalarBinding};
+use crate::types::{ContextValue, FieldContext, PyObj, RootValue, ScalarBinding};
 use crate::values::{build_kwargs, py_to_field_value_for_type};
 
 pub(crate) async fn resolve_field(
     ctx: ResolverContext<'_>,
-    resolver: Option<PyObj>,
-    arg_names: Arc<Vec<String>>,
-    field_name: Arc<String>,
-    source_name: Arc<String>,
-    scalar_bindings: Arc<Vec<ScalarBinding>>,
-    output_type: TypeRef,
-    abstract_types: Arc<HashSet<String>>,
+    field_ctx: Arc<FieldContext>,
 ) -> Result<Option<FieldValue<'_>>, Error> {
-    let value = resolve_python_value(ctx, resolver, arg_names, &field_name, &source_name).await?;
+    let value = resolve_python_value(
+        ctx,
+        field_ctx.resolver.clone(),
+        &field_ctx.arg_names,
+        &field_ctx.field_name,
+        &field_ctx.source_name,
+    )
+    .await?;
     let field_value = Python::attach(|py| {
         py_to_field_value_for_type(
             py,
             value.bind(py),
-            &output_type,
-            scalar_bindings.as_ref(),
-            abstract_types.as_ref(),
+            &field_ctx.output_type,
+            field_ctx.scalar_bindings.as_ref(),
+            field_ctx.abstract_types.as_ref(),
         )
     })
     .map_err(py_err_to_error)?;
@@ -39,19 +40,24 @@ pub(crate) async fn resolve_field(
 
 pub(crate) async fn resolve_subscription_stream<'a>(
     ctx: ResolverContext<'a>,
-    resolver: Option<PyObj>,
-    arg_names: Arc<Vec<String>>,
-    field_name: Arc<String>,
-    source_name: Arc<String>,
-    scalar_bindings: Arc<Vec<ScalarBinding>>,
-    output_type: TypeRef,
-    abstract_types: Arc<HashSet<String>>,
+    field_ctx: Arc<FieldContext>,
 ) -> Result<BoxStream<'a, Result<FieldValue<'a>, Error>>, Error> {
-    let value =
-        resolve_subscription_value(ctx, resolver, arg_names, &field_name, &source_name).await?;
+    let value = resolve_subscription_value(
+        ctx,
+        field_ctx.resolver.clone(),
+        &field_ctx.arg_names,
+        &field_ctx.field_name,
+        &field_ctx.source_name,
+    )
+    .await?;
     let iterator =
         Python::attach(|py| subscription_iterator(value.bind(py))).map_err(py_err_to_error)?;
-    subscription_stream(iterator, scalar_bindings, output_type, abstract_types)
+    subscription_stream(
+        iterator,
+        field_ctx.scalar_bindings.clone(),
+        field_ctx.output_type.clone(),
+        field_ctx.abstract_types.clone(),
+    )
 }
 
 fn subscription_iterator(value_ref: &Bound<'_, PyAny>) -> PyResult<PyObj> {
@@ -99,7 +105,7 @@ fn subscription_stream<'a>(
 async fn resolve_python_value(
     ctx: ResolverContext<'_>,
     resolver: Option<PyObj>,
-    arg_names: Arc<Vec<String>>,
+    arg_names: &[String],
     field_name: &str,
     source_name: &str,
 ) -> Result<Py<PyAny>, Error> {
@@ -136,7 +142,7 @@ async fn resolve_python_value(
 async fn resolve_subscription_value(
     ctx: ResolverContext<'_>,
     resolver: Option<PyObj>,
-    arg_names: Arc<Vec<String>>,
+    arg_names: &[String],
     field_name: &str,
     source_name: &str,
 ) -> Result<Py<PyAny>, Error> {

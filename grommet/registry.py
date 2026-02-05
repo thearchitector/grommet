@@ -2,8 +2,7 @@ import dataclasses
 from builtins import type as pytype
 from typing import TYPE_CHECKING
 
-from .annotations import analyze_annotation, is_internal_field
-from .errors import list_type_requires_parameter
+from .annotations import is_internal_field, walk_annotation
 from .metadata import (
     EnumMeta,
     FieldMeta,
@@ -30,7 +29,7 @@ if TYPE_CHECKING:
     from typing import Any
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class TraversalResult:
     types: dict[pytype, TypeMeta]
     scalars: dict[pytype, ScalarMeta]
@@ -54,17 +53,18 @@ def _traverse_schema(entrypoints: "Iterable[pytype | None]") -> TraversalResult:
     visited: set[pytype] = set()
 
     def track_annotation(annotation: "Any") -> None:
-        for grommet_type in _iter_type_refs(annotation):
-            pending.append(grommet_type)
-        for scalar_type in _iter_scalar_refs(annotation):
-            scalars.setdefault(scalar_type, _get_scalar_meta(scalar_type))
-        for enum_type in _iter_enum_refs(annotation):
-            enums.setdefault(enum_type, _get_enum_meta(enum_type))
-        for union_type in _iter_union_refs(annotation):
-            if union_type not in unions:
-                union_meta = _get_union_meta(union_type)
-                unions[union_type] = union_meta
-                pending.extend(union_meta.types)
+        for kind, ref_type in walk_annotation(annotation):
+            if kind == "type":
+                pending.append(ref_type)
+            elif kind == "scalar":
+                scalars.setdefault(ref_type, _get_scalar_meta(ref_type))
+            elif kind == "enum":
+                enums.setdefault(ref_type, _get_enum_meta(ref_type))
+            elif kind == "union":
+                if ref_type not in unions:
+                    union_meta = _get_union_meta(ref_type)
+                    unions[ref_type] = union_meta
+                    pending.extend(union_meta.types)
 
     while pending:
         cls = pending.pop()
@@ -102,65 +102,3 @@ def _traverse_schema(entrypoints: "Iterable[pytype | None]") -> TraversalResult:
                 for arg_ann in arg_types.values():
                     track_annotation(arg_ann)
     return TraversalResult(types=types, scalars=scalars, enums=enums, unions=unions)
-
-
-def _iter_type_refs(annotation: "Any") -> list[pytype]:
-    info = analyze_annotation(annotation)
-    inner = info.async_item if info.is_async_iterable else info.inner
-    if inner is None:
-        return []
-    inner_info = analyze_annotation(inner)
-    if inner_info.is_list:
-        if inner_info.list_item is None:
-            raise list_type_requires_parameter()
-        return _iter_type_refs(inner_info.list_item)
-    if _is_grommet_type(inner):
-        return [inner]
-    if _is_union_type(inner):
-        return [inner]
-    return []
-
-
-def _iter_scalar_refs(annotation: "Any") -> list[pytype]:
-    info = analyze_annotation(annotation)
-    inner = info.async_item if info.is_async_iterable else info.inner
-    if inner is None:
-        return []
-    inner_info = analyze_annotation(inner)
-    if inner_info.is_list:
-        if inner_info.list_item is None:
-            raise list_type_requires_parameter()
-        return _iter_scalar_refs(inner_info.list_item)
-    if _is_scalar_type(inner):
-        return [inner]
-    return []
-
-
-def _iter_enum_refs(annotation: "Any") -> list[pytype]:
-    info = analyze_annotation(annotation)
-    inner = info.async_item if info.is_async_iterable else info.inner
-    if inner is None:
-        return []
-    inner_info = analyze_annotation(inner)
-    if inner_info.is_list:
-        if inner_info.list_item is None:
-            raise list_type_requires_parameter()
-        return _iter_enum_refs(inner_info.list_item)
-    if _is_enum_type(inner):
-        return [inner]
-    return []
-
-
-def _iter_union_refs(annotation: "Any") -> list[pytype]:
-    info = analyze_annotation(annotation)
-    inner = info.async_item if info.is_async_iterable else info.inner
-    if inner is None:
-        return []
-    inner_info = analyze_annotation(inner)
-    if inner_info.is_list:
-        if inner_info.list_item is None:
-            raise list_type_requires_parameter()
-        return _iter_union_refs(inner_info.list_item)
-    if _is_union_type(inner):
-        return [inner]
-    return []

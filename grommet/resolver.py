@@ -1,3 +1,4 @@
+import dataclasses
 import inspect
 from functools import lru_cache
 from typing import TYPE_CHECKING
@@ -15,6 +16,19 @@ from .typing_utils import _get_type_hints
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Any
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ResolverSpec:
+    """Precomputed resolver metadata."""
+
+    wrapper: "Callable[..., Any]"
+    arg_defs: tuple[dict[str, "Any"], ...]
+    is_subscription: bool
+    is_asyncgen: bool
+
+
+_RESOLVER_CACHE: dict[tuple["Callable[..., Any]", str], ResolverSpec] = {}
 
 
 _RESERVED_PARAM_NAMES = {"parent", "root", "self", "info", "context"}
@@ -107,6 +121,21 @@ def _is_async_iterator(value: "Any") -> bool:
 def _wrap_resolver(
     resolver: "Callable[..., Any]", *, kind: str, field_name: str
 ) -> "tuple[Callable[..., Any], list[dict[str, Any]]]":
+    """Wrap a resolver with coercion and return (wrapper, arg_defs)."""
+    cache_key = (resolver, kind)
+    if cache_key in _RESOLVER_CACHE:
+        spec = _RESOLVER_CACHE[cache_key]
+        return spec.wrapper, list(spec.arg_defs)
+
+    spec = _build_resolver_spec(resolver, kind=kind, field_name=field_name)
+    _RESOLVER_CACHE[cache_key] = spec
+    return spec.wrapper, list(spec.arg_defs)
+
+
+def _build_resolver_spec(
+    resolver: "Callable[..., Any]", *, kind: str, field_name: str
+) -> ResolverSpec:
+    """Build a ResolverSpec with precomputed metadata."""
     resolver_name = _resolver_name(resolver)
     is_subscription = kind == "subscription"
     is_asyncgen = _is_asyncgen_callable(resolver)
@@ -174,4 +203,9 @@ def _wrap_resolver(
             return awaited
         return await result
 
-    return wrapper, arg_defs
+    return ResolverSpec(
+        wrapper=wrapper,
+        arg_defs=tuple(arg_defs),
+        is_subscription=is_subscription,
+        is_asyncgen=is_asyncgen,
+    )

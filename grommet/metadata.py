@@ -55,7 +55,7 @@ class GrommetMeta:
     type: GrommetMetaType
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class TypeMeta(GrommetMeta):
     kind: str
     name: str
@@ -100,7 +100,7 @@ def _interface_implementers(cls: pytype) -> tuple[pytype, ...]:
     return tuple(_INTERFACE_IMPLEMENTERS.get(cls, ()))
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class FieldMeta(GrommetMeta):
     resolver: "Callable[..., Any] | None" = None
     description: str | None = None
@@ -109,7 +109,7 @@ class FieldMeta(GrommetMeta):
     type: GrommetMetaType = dataclasses.field(init=False, default=GrommetMetaType.FIELD)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class ScalarMeta(GrommetMeta):
     name: str
     serialize: "Callable[[Any], Any]"
@@ -121,14 +121,14 @@ class ScalarMeta(GrommetMeta):
     )
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class EnumMeta(GrommetMeta):
     name: str
     description: str | None = None
     type: GrommetMetaType = dataclasses.field(init=False, default=GrommetMetaType.ENUM)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class UnionMeta(GrommetMeta):
     name: str
     types: tuple[pytype, ...]
@@ -136,7 +136,7 @@ class UnionMeta(GrommetMeta):
     type: GrommetMetaType = dataclasses.field(init=False, default=GrommetMetaType.UNION)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class TypeSpec:
     kind: str
     name: str | None = None

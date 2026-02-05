@@ -93,3 +93,18 @@ pub(crate) struct ScalarBinding {
     pub(crate) py_type: PyObj,
     pub(crate) serialize: PyObj,
 }
+
+use std::collections::HashSet;
+
+use async_graphql::dynamic::TypeRef;
+
+#[derive(Clone)]
+pub(crate) struct FieldContext {
+    pub(crate) resolver: Option<PyObj>,
+    pub(crate) arg_names: Vec<String>,
+    pub(crate) field_name: String,
+    pub(crate) source_name: String,
+    pub(crate) output_type: TypeRef,
+    pub(crate) scalar_bindings: Arc<Vec<ScalarBinding>>,
+    pub(crate) abstract_types: Arc<HashSet<String>>,
+}

@@ -75,3 +75,38 @@ def test_is_internal_field_respects_prefix_and_classvar() -> None:
     assert is_internal_field("_hidden", int) is True
     assert is_internal_field("value", ClassVar[int]) is True
     assert is_internal_field("value", int) is False
+
+
+def test_walk_annotation_exits_cleanly_on_simple_types() -> None:
+    """Test walk_annotation handles simple non-grommet types."""
+    from grommet.annotations import walk_annotation
+
+    results = list(walk_annotation(int))
+    assert results == []
+
+    results = list(walk_annotation(str))
+    assert results == []
+
+
+def test_walk_annotation_nested_list_of_unions() -> None:
+    """Test walk_annotation handles nested list of unions."""
+    from dataclasses import dataclass
+
+    import grommet as gm
+    from grommet.annotations import walk_annotation
+
+    @gm.type
+    @dataclass
+    class TypeA:
+        name: str
+
+    @gm.type
+    @dataclass
+    class TypeB:
+        value: int
+
+    TestUnion = gm.union("TestUnion", types=[TypeA, TypeB])
+
+    results = list(walk_annotation(list[TestUnion]))
+    kinds = [r[0] for r in results]
+    assert "union" in kinds

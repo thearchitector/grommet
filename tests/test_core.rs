@@ -538,6 +538,113 @@ Input.__grommet_meta__ = Meta("input", "Input")
                 assert_eq!(errors.cast::<PyList>().unwrap().len(), 2);
             });
         }
+
+        /// Verifies is_builtin_type correctly identifies Python built-in types.
+        #[test]
+        fn is_builtin_type_identifies_common_types() {
+            crate::with_py(|py| {
+                let none_obj = py.None();
+                assert!(is_builtin_type(&none_obj.bind(py)));
+
+                let bool_obj = PyBool::new(py, true).to_owned().into_any();
+                assert!(is_builtin_type(&bool_obj));
+
+                let int_obj = PyInt::new(py, 42).into_any();
+                assert!(is_builtin_type(&int_obj));
+
+                let float_obj = 3.14f64.into_pyobject(py).unwrap().into_any();
+                assert!(is_builtin_type(&float_obj));
+
+                let str_obj = "hello".into_pyobject(py).unwrap().into_any();
+                assert!(is_builtin_type(&str_obj));
+
+                let list_obj = PyList::empty(py).into_any();
+                assert!(is_builtin_type(&list_obj));
+
+                let tuple_obj = (1, 2).into_pyobject(py).unwrap().into_any();
+                assert!(is_builtin_type(&tuple_obj));
+
+                let dict_obj = PyDict::new(py).into_any();
+                assert!(is_builtin_type(&dict_obj));
+
+                // Custom class should NOT be a builtin type
+                let locals = PyDict::new(py);
+                py.run(
+                    pyo3::ffi::c_str!("class Custom: pass\nobj = Custom()"),
+                    None,
+                    Some(&locals),
+                )
+                .unwrap();
+                let custom_obj = locals.get_item("obj").unwrap().unwrap();
+                assert!(!is_builtin_type(&custom_obj));
+            });
+        }
+
+        /// Verifies sequence conversion helpers handle lists and tuples correctly.
+        #[test]
+        fn convert_sequence_helpers_cover_paths() {
+            crate::with_py(|py| {
+                let bindings: Vec<ScalarBinding> = Vec::new();
+                let abstract_types = HashSet::new();
+                let inner_type = TypeRef::named("String");
+
+                // Test list conversion with type
+                let list = PyList::new(py, ["a", "b"]).unwrap();
+                let result = convert_sequence_to_field_values(
+                    py,
+                    &list.into_any(),
+                    &inner_type,
+                    &bindings,
+                    &abstract_types,
+                )
+                .unwrap();
+                let _ = result;
+
+                // Test tuple conversion with type
+                let tuple = ("x", "y").into_pyobject(py).unwrap().into_any();
+                let result = convert_sequence_to_field_values(
+                    py,
+                    &tuple,
+                    &inner_type,
+                    &bindings,
+                    &abstract_types,
+                )
+                .unwrap();
+                let _ = result;
+
+                // Test untyped list conversion
+                let list = PyList::new(py, [1, 2, 3]).unwrap();
+                let result =
+                    convert_sequence_to_field_values_untyped(py, &list.into_any(), &bindings)
+                        .unwrap();
+                let _ = result;
+
+                // Test untyped tuple conversion
+                let tuple = (4, 5, 6).into_pyobject(py).unwrap().into_any();
+                let result =
+                    convert_sequence_to_field_values_untyped(py, &tuple, &bindings).unwrap();
+                let _ = result;
+
+                // Test error case: non-sequence passed to typed converter
+                let int_obj = PyInt::new(py, 42).into_any();
+                let err = convert_sequence_to_field_values(
+                    py,
+                    &int_obj,
+                    &inner_type,
+                    &bindings,
+                    &abstract_types,
+                )
+                .expect_err("should error for non-list");
+                let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
+                assert_eq!(msg, "Expected list for GraphQL list type");
+
+                // Test error case: non-sequence passed to untyped converter
+                let err = convert_sequence_to_field_values_untyped(py, &int_obj, &bindings)
+                    .expect_err("should error for non-list");
+                let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
+                assert_eq!(msg, "Expected list for GraphQL list type");
+            });
+        }
     }
 }
 
