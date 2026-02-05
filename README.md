@@ -4,138 +4,109 @@ High performance Python GraphQL server library inspired by [Strawberry](https://
 
 This is an experiment in a nearly 100% AI-written project. I provide guidelines and design guidance through review of the generated code and curated revision plans, but AI does the heavy lifting. Features are developed as my token and usage counts reset.
 
-## Example
+## Quick Start
 
-```python
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+### Installation
 
-import grommet as gm
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-
-@gm.type
-@dataclass
-class Query:
-    @gm.field
-    @staticmethod
-    async def hello(parent, info, name: str = "world") -> str:
-        return f"Hello, {name}!"
-
-schema = gm.Schema(query=Query)
-
-result = await schema.execute("{ hello(name: \"Ada\") }")
-print(result["data"]["hello"])
+```bash
+pip install grommet
+# or
+uv add grommet
 ```
 
-## Subscriptions
+### Examples
+
+Define your GraphQL types as decorated dataclasses, build a schema, and execute queries:
 
 ```python
-@gm.type
+import asyncio
+from dataclasses import dataclass
+
+import grommet
+
+
 @dataclass
-class Subscription:
-    @gm.field
+@grommet.type
+class Query:
+    greeting: str = "Hello, world!"
+
+schema = grommet.Schema(query=Query)
+result = asyncio.run(schema.execute("{ greeting }"))
+print(result)  # {'data': {'greeting': 'Hello, world!'}}
+```
+
+Use `grommet.field` to define resolver-backed fields with arguments:
+
+```python
+@dataclass
+@grommet.type
+class Query:
+    @grommet.field
     @staticmethod
-    async def countdown(parent, info, limit: int) -> "AsyncIterator[int]":
+    async def hello(name: str) -> str:
+        return f"Hello, {name}!"
+
+schema = grommet.Schema(query=Query)
+result = asyncio.run(schema.execute('{ hello(name: "grommet") }'))
+print(result)  # {'data': {'hello': 'Hello, grommet!'}}
+```
+
+Add mutations by defining a separate mutation type:
+
+```python
+@dataclass
+@grommet.input
+class AddUserInput:
+    name: str
+    email: str
+
+@dataclass
+@grommet.type
+class User:
+    name: str
+    email: str
+
+@dataclass
+@grommet.type
+class Mutation:
+    @grommet.field
+    @staticmethod
+    async def add_user(input: AddUserInput) -> User:
+        return User(name=input.name, email=input.email)
+
+schema = grommet.Schema(query=Query, mutation=Mutation)
+```
+
+Stream real-time data with subscriptions:
+
+```python
+from collections.abc import AsyncIterator
+
+@dataclass
+@grommet.type(name="Subscription")
+class Subscription:
+    @grommet.field
+    @staticmethod
+    async def counter(limit: int) -> AsyncIterator[int]:
         for i in range(limit):
             yield i
 
-schema = gm.Schema(query=Query, subscription=Subscription)
-stream = schema.subscribe("subscription ($limit: Int!) { countdown(limit: $limit) }", variables={"limit": 3})
-async for payload in stream:
-    print(payload["data"]["countdown"])
+schema = grommet.Schema(query=Query, subscription=Subscription)
+
+async def main():
+    stream = schema.subscribe("subscription { counter(limit: 3) }")
+    async for event in stream:
+        print(event)
+        # {'data': {'counter': 0}}
+        # {'data': {'counter': 1}}
+        # {'data': {'counter': 2}}
+
+asyncio.run(main())
 ```
 
-## Custom Scalars
+## Development
 
-```python
-@gm.scalar(
-    name="Date",
-    serialize=lambda value: value.value,
-    parse_value=lambda value: Date(str(value)),
-)
-@dataclass(frozen=True)
-class Date:
-    value: str
-
-@gm.type
-@dataclass
-class Query:
-    @gm.field
-    @staticmethod
-    async def today(parent, info) -> Date:
-        return Date("2026-01-30")
-
-schema = gm.Schema(query=Query)
-```
-
-## Schema Overview
-
-```python
-schema = gm.Schema(query=Query)
-print(schema.sdl())
-```
-
-## Inputs
-
-```python
-@gm.input
-@dataclass
-class UserInput:
-    id: gm.ID
-    name: str | None = None
-```
-
-Use input types in resolver signatures:
-
-```python
-async def get_user(parent, info, user: UserInput) -> User:
-    ...
-```
-
-## Notes
-
-- Resolvers must be async.
-- Field arguments are derived from resolver type annotations.
-- Input types must be marked with `@gm.input`.
-- Use `Schema.sdl()` to inspect the generated schema.
-- Resolver params may include `parent`, `info` (`gm.Info`), `context`, and `root`.
-- Fields prefixed with `_`, annotated as `ClassVar`, or wrapped in `gm.Internal[...]`/`gm.Private[...]` are excluded from the schema.
-
-## Runtime Configuration
-
-```python
-# Configure the Tokio runtime before creating schemas.
-gm.configure_runtime(use_current_thread=True)
-```
-
-## Event Loop Compatibility
-
-- Call `uvloop.install()` before creating or awaiting Grommet futures.
-- When using `asyncio.run`, create schemas and call Grommet APIs inside the coroutine passed to `asyncio.run`.
-
-## Free-Threaded Python
-
-Grommet currently opts out of free-threaded Python builds while we audit thread-safety for shared
-state and resolver execution. This is implemented by setting `gil_used = true` on the PyO3 module.
-
-## Benchmarks
-
-```bash
-uv run python scripts/bench_simple.py
-uv run python scripts/bench_large_list.py
-uv run python benchmarks/bench_schema_build.py
-uv run python benchmarks/bench_resolver_call.py
-```
-
-## Type stubs (experimental)
-
-PyO3 introspection data is enabled via the `experimental-inspect` feature. Stub generation is still
-in progress and not wired into maturin yet, so `.pyi` files need to be generated out-of-band using
-the `pyo3-introspection` crate against a built extension module.
-
-## Build
+The public APIs for this project are defined by me (a human). Everything else is AI-written following `AGENTS.md` and plan guidelines. Implementation iterations take the form of plan documents in `ai_plans/`.
 
 This project is configured for uv + maturin:
 
@@ -145,7 +116,9 @@ uv pip install -e .
 maturin develop
 ```
 
-For local Rust tests using uv-managed Python, ensure the `.venv` is present and that either
-`.cargo/config.toml` or your shell environment provides `PYO3_PYTHON`. This repo includes a
-`.cargo/config.toml` that sets `PYO3_PYTHON=python`, so activate the uv environment before running
-`cargo test` (or override the variable if you use a different interpreter).
+Run unit tests with:
+
+```bash
+pytest
+cargo test
+```
