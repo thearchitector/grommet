@@ -1,8 +1,13 @@
 # grommet
 
-High performance Python GraphQL server library inspired by [Strawberry](https://strawberry.rocks/) and backed by [async-graphql](https://async-graphql.github.io/async-graphql/en/index.html).
+![Made with AI](https://img.shields.io/badge/%E2%9C%A8-Made_with_AI-8A2BE2?style=for-the-badge)
+![Licensed under BSD-3-Clause-Clear](https://img.shields.io/badge/license-BSD--3--Clause--Clear-yellow?style=for-the-badge)
+
+High performance async Python GraphQL server library inspired by [Strawberry](https://strawberry.rocks/) and backed by [async-graphql](https://async-graphql.github.io/async-graphql/en/index.html).
 
 This is an experiment in a nearly 100% AI-written project. I provide guidelines and design guidance through review of the generated code and curated revision plans, but AI does the heavy lifting. Features are developed as my token and usage counts reset.
+
+<!-- <AI_GENERATED> -->
 
 ## Quick Start
 
@@ -25,10 +30,13 @@ from dataclasses import dataclass
 import grommet
 
 
-@dataclass
 @grommet.type
+@dataclass
 class Query:
-    greeting: str = "Hello, world!"
+    @grommet.field
+    @staticmethod
+    async def greeting() -> str:
+        return "Hello, world!"
 
 schema = grommet.Schema(query=Query)
 result = asyncio.run(schema.execute("{ greeting }"))
@@ -38,8 +46,8 @@ print(result)  # {'data': {'greeting': 'Hello, world!'}}
 Use `grommet.field` to define resolver-backed fields with arguments:
 
 ```python
-@dataclass
 @grommet.type
+@dataclass
 class Query:
     @grommet.field
     @staticmethod
@@ -54,20 +62,20 @@ print(result)  # {'data': {'hello': 'Hello, grommet!'}}
 Add mutations by defining a separate mutation type:
 
 ```python
-@dataclass
 @grommet.input
+@dataclass
 class AddUserInput:
     name: str
     email: str
 
-@dataclass
 @grommet.type
+@dataclass
 class User:
     name: str
     email: str
 
-@dataclass
 @grommet.type
+@dataclass
 class Mutation:
     @grommet.field
     @staticmethod
@@ -82,8 +90,8 @@ Stream real-time data with subscriptions:
 ```python
 from collections.abc import AsyncIterator
 
-@dataclass
 @grommet.type(name="Subscription")
+@dataclass
 class Subscription:
     @grommet.field
     @staticmethod
@@ -103,6 +111,8 @@ async def main():
 
 asyncio.run(main())
 ```
+
+<!-- </AI_GENERATED> -->
 
 ## Development
 

@@ -109,3 +109,7 @@ def hello(tomato: list["Any"]) -> str | None:
     """
     pass
 ```
+
+## Documentation
+
+When editing documentation, first scan the file for `<AI_GENERATED>` tags. If you find any, you MUST only edit the content between these tags. NEVER edit the content outside these tags.
