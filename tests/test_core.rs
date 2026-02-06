@@ -8,7 +8,19 @@ fn with_py<F, R>(f: F) -> R
 where
     F: for<'py> FnOnce(Python<'py>) -> R,
 {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+
     Python::initialize();
+    // Eagerly import asyncio and grommet submodules exactly once to avoid
+    // circular-import errors and per-module import-lock deadlocks that
+    // surface on Python 3.14+ when parallel test threads race to first-import.
+    INIT.call_once(|| {
+        Python::attach(|py| {
+            py.import("asyncio").unwrap();
+            py.import("grommet.plan").unwrap();
+        });
+    });
     Python::attach(f)
 }
 
