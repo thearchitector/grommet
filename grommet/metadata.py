@@ -41,6 +41,13 @@ else:
             return Annotated[item, _INTERNAL_MARKER]
 
 
+class TypeKind(enum.Enum):
+    OBJECT = "object"
+    INTERFACE = "interface"
+    INPUT = "input"
+    SUBSCRIPTION = "subscription"
+
+
 class GrommetMetaType(enum.Enum):
     TYPE = "type"
     INTERFACE = "interface"
@@ -51,35 +58,39 @@ class GrommetMetaType(enum.Enum):
     FIELD = "field"
 
 
+_TYPE_KIND_TO_META: dict[TypeKind, GrommetMetaType] = {
+    TypeKind.OBJECT: GrommetMetaType.TYPE,
+    TypeKind.INTERFACE: GrommetMetaType.INTERFACE,
+    TypeKind.INPUT: GrommetMetaType.INPUT,
+    TypeKind.SUBSCRIPTION: GrommetMetaType.TYPE,
+}
+
+
 class GrommetMeta:
     type: GrommetMetaType
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class TypeMeta(GrommetMeta):
-    kind: str
+    kind: TypeKind
     name: str
     description: str | None = None
     implements: tuple[pytype, ...] = ()
     type: GrommetMetaType = dataclasses.field(init=False)
 
     def __post_init__(self) -> None:
-        meta_type = {
-            "object": GrommetMetaType.TYPE,
-            "interface": GrommetMetaType.INTERFACE,
-            "input": GrommetMetaType.INPUT,
-        }.get(self.kind)
+        meta_type = _TYPE_KIND_TO_META.get(self.kind)
         if meta_type is None:
-            raise type_meta_unknown_kind(self.kind)
+            raise type_meta_unknown_kind(self.kind.value)
         object.__setattr__(self, "type", meta_type)
 
 
 def _register_type(cls: pytype, meta: TypeMeta) -> None:
     _GROMMET_TYPES.add(cls)
-    if meta.kind == "interface":
+    if meta.kind is TypeKind.INTERFACE:
         _INTERFACE_IMPLEMENTERS.setdefault(cls, set())
         return
-    if meta.kind == "object":
+    if meta.kind is TypeKind.OBJECT:
         for iface in meta.implements:
             _INTERFACE_IMPLEMENTERS.setdefault(iface, set()).add(cls)
 

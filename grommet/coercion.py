@@ -1,14 +1,19 @@
 import dataclasses
 from typing import TYPE_CHECKING
 
-from .annotations import analyze_annotation
+from .annotations import (
+    _get_scalar_meta,
+    _is_enum_type,
+    _is_input_type,
+    _is_scalar_type,
+    analyze_annotation,
+)
 from .errors import (
     input_mapping_expected,
     invalid_enum_value,
     list_type_requires_parameter,
 )
 from .metadata import ID, MISSING
-from .typespec import _get_scalar_meta, _is_enum_type, _is_input_type, _is_scalar_type
 
 if TYPE_CHECKING:
     from collections.abc import Callable

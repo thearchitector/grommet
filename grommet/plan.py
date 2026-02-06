@@ -3,19 +3,10 @@ import inspect
 from builtins import type as pytype
 from typing import TYPE_CHECKING
 
-from .annotations import is_internal_field, unwrap_async_iterable, walk_annotation
-from .metadata import (
-    MISSING,
-    EnumMeta,
-    FieldMeta,
-    ScalarMeta,
-    TypeMeta,
-    UnionMeta,
-    _interface_implementers,
-)
-from .typespec import (
+from .annotations import (
     _get_enum_meta,
     _get_scalar_meta,
+    _get_type_hints,
     _get_type_meta,
     _get_union_meta,
     _is_enum_type,
@@ -23,8 +14,21 @@ from .typespec import (
     _is_scalar_type,
     _is_union_type,
     _type_spec_from_annotation,
+    is_internal_field,
+    unwrap_async_iterable,
+    walk_annotation,
 )
-from .typing_utils import _get_type_hints
+from .metadata import (
+    MISSING,
+    EnumMeta,
+    FieldMeta,
+    ScalarMeta,
+    TypeKind,
+    TypeMeta,
+    TypeSpec,
+    UnionMeta,
+    _interface_implementers,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -36,7 +40,7 @@ class ArgPlan:
     """Planned argument for a resolver field."""
 
     name: str
-    graphql_type: str
+    type_spec: TypeSpec
     default: "Any" = MISSING
 
 
@@ -49,19 +53,20 @@ class FieldPlan:
 
     name: str
     source: str
-    graphql_type: str
+    type_spec: TypeSpec
     resolver: "Callable[..., Any] | None" = None
     args: tuple["ArgPlan", ...] = ()
     default: "Any" = _NO_DEFAULT
     description: str | None = None
     deprecation: str | None = None
+    resolver_key: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class TypePlan:
     """Planned GraphQL type (object, interface, input, or subscription)."""
 
-    kind: str
+    kind: TypeKind
     name: str
     cls: pytype
     fields: tuple[FieldPlan, ...]
@@ -104,6 +109,7 @@ class SchemaPlan:
     scalars: tuple[ScalarPlan, ...]
     enums: tuple[EnumPlan, ...]
     unions: tuple[UnionPlan, ...]
+    resolvers: dict[str, "Callable[..., Any]"] = dataclasses.field(default_factory=dict)
 
 
 def _get_field_meta(dc_field: "dataclasses.Field[Any]") -> FieldMeta:
@@ -166,7 +172,7 @@ def build_schema_plan(
             continue
         type_meta = _get_type_meta(cls)
         types[cls] = type_meta
-        if type_meta.kind == "interface":
+        if type_meta.kind is TypeKind.INTERFACE:
             pending.extend(_interface_implementers(cls))
         pending.extend(type_meta.implements)
         hints = _get_type_hints(cls)
@@ -187,15 +193,49 @@ def build_schema_plan(
         types, query, mutation, subscription, scalars, enums, unions
     )
 
+    resolvers: dict[str, "Callable[..., Any]"] = {}
+    resolved_type_plans = _wrap_plan_resolvers(type_plans, resolvers)
+
     return SchemaPlan(
         query=_get_type_meta(query).name,
         mutation=_get_type_meta(mutation).name if mutation else None,
         subscription=_get_type_meta(subscription).name if subscription else None,
-        types=tuple(type_plans),
+        types=tuple(resolved_type_plans),
         scalars=tuple(ScalarPlan(cls=cls, meta=meta) for cls, meta in scalars.items()),
         enums=tuple(EnumPlan(cls=cls, meta=meta) for cls, meta in enums.items()),
         unions=tuple(UnionPlan(cls=cls, meta=meta) for cls, meta in unions.items()),
+        resolvers=resolvers,
     )
+
+
+def _wrap_plan_resolvers(
+    type_plans: list[TypePlan], resolvers: dict[str, "Callable[..., Any]"]
+) -> list[TypePlan]:
+    """Wrap resolvers on field plans and populate resolver keys."""
+    from .resolver import _wrap_resolver
+
+    result: list[TypePlan] = []
+    for tp in type_plans:
+        if tp.kind is TypeKind.INPUT:
+            result.append(tp)
+            continue
+        is_interface = tp.kind is TypeKind.INTERFACE
+        new_fields: list[FieldPlan] = []
+        for fp in tp.fields:
+            if fp.resolver is not None:
+                wrapper, _ = _wrap_resolver(
+                    fp.resolver, kind=tp.kind, field_name=fp.name
+                )
+                if not is_interface:
+                    key = f"{tp.name}.{fp.name}"
+                    resolvers[key] = wrapper
+                    new_fields.append(dataclasses.replace(fp, resolver_key=key))
+                else:
+                    new_fields.append(fp)
+            else:
+                new_fields.append(fp)
+        result.append(dataclasses.replace(tp, fields=tuple(new_fields)))
+    return result
 
 
 def _build_type_plans(
@@ -219,10 +259,10 @@ def _build_type_plans(
         return meta.name
 
     for cls, meta in types.items():
-        if meta.kind in ("object", "interface"):
-            is_interface = meta.kind == "interface"
+        if meta.kind in (TypeKind.OBJECT, TypeKind.INTERFACE):
+            is_interface = meta.kind is TypeKind.INTERFACE
             type_kind = (
-                "subscription"
+                TypeKind.SUBSCRIPTION
                 if subscription is not None and cls is subscription
                 else meta.kind
             )
@@ -237,11 +277,11 @@ def _build_type_plans(
                     description=meta.description,
                 )
             )
-        elif meta.kind == "input":
+        elif meta.kind is TypeKind.INPUT:
             field_plans = _build_input_field_plans(cls)
             type_plans.append(
                 TypePlan(
-                    kind="input",
+                    kind=TypeKind.INPUT,
                     name=meta.name,
                     cls=cls,
                     fields=tuple(field_plans),
@@ -253,7 +293,7 @@ def _build_type_plans(
 
 
 def _build_field_plans(
-    cls: pytype, meta: TypeMeta, type_kind: str, is_interface: bool
+    cls: pytype, meta: TypeMeta, type_kind: TypeKind, is_interface: bool
 ) -> list[FieldPlan]:
     """Build FieldPlan for object/interface/subscription fields."""
     from .coercion import _default_value_for_annotation
@@ -270,13 +310,13 @@ def _build_field_plans(
             continue
 
         force_nullable = dc_field.default is None
-        if type_kind == "subscription" and field_meta.resolver is not None:
+        if type_kind is TypeKind.SUBSCRIPTION and field_meta.resolver is not None:
             annotation, iterator_optional = unwrap_async_iterable(annotation)
             force_nullable = force_nullable or iterator_optional
 
-        gql_type = _type_spec_from_annotation(
+        type_spec = _type_spec_from_annotation(
             annotation, expect_input=False, force_nullable=force_nullable
-        ).to_graphql()
+        )
 
         resolver = field_meta.resolver if not is_interface else None
         args: list[ArgPlan] = []
@@ -302,18 +342,14 @@ def _build_field_plans(
                         arg_annotation, param.default
                     )
                 args.append(
-                    ArgPlan(
-                        name=param.name,
-                        graphql_type=arg_spec.to_graphql(),
-                        default=arg_default,
-                    )
+                    ArgPlan(name=param.name, type_spec=arg_spec, default=arg_default)
                 )
 
         field_plans.append(
             FieldPlan(
                 name=field_name,
                 source=dc_field.name,
-                graphql_type=gql_type,
+                type_spec=type_spec,
                 resolver=resolver,
                 args=tuple(args),
                 description=field_meta.description,
@@ -339,9 +375,9 @@ def _build_input_field_plans(cls: pytype) -> list[FieldPlan]:
         force_nullable = (
             dc_field.default is not MISSING or dc_field.default_factory is not MISSING
         )
-        gql_type = _type_spec_from_annotation(
+        type_spec = _type_spec_from_annotation(
             annotation, expect_input=True, force_nullable=force_nullable
-        ).to_graphql()
+        )
 
         default_value = _input_field_default(dc_field, annotation)
         field_default = default_value if default_value is not MISSING else _NO_DEFAULT
@@ -350,7 +386,7 @@ def _build_input_field_plans(cls: pytype) -> list[FieldPlan]:
             FieldPlan(
                 name=dc_field.name,
                 source=dc_field.name,
-                graphql_type=gql_type,
+                type_spec=type_spec,
                 default=field_default,
             )
         )

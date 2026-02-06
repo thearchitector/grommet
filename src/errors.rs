@@ -14,14 +14,6 @@ pub(crate) fn py_value_error(message: impl Into<String>) -> PyErr {
     PyErr::new::<PyValueError, _>(message.into())
 }
 
-pub(crate) fn missing_field(name: &str) -> PyErr {
-    py_value_error(format!("Missing {name}"))
-}
-
-pub(crate) fn unknown_type_kind(kind: &str) -> PyErr {
-    py_value_error(format!("Unknown type kind: {kind}"))
-}
-
 pub(crate) fn no_parent_value() -> Error {
     Error::new("No parent value for field")
 }

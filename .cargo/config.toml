@@ -1,2 +1,3 @@
 [env]
 PYO3_PYTHON = { value = "python", force = false }
+PYTHONPATH = { value = ".", relative = true, force = false }

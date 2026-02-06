@@ -201,6 +201,27 @@ fn py_to_field_value(
     Ok(FieldValue::owned_any(PyObj::new(value.clone().unbind())))
 }
 
+fn collect_sequence<T>(
+    value: &Bound<'_, PyAny>,
+    mut convert: impl FnMut(&Bound<'_, PyAny>) -> PyResult<T>,
+) -> PyResult<Vec<T>> {
+    if let Ok(seq) = value.cast::<PyList>() {
+        let mut items = Vec::with_capacity(seq.len());
+        for item in seq.iter() {
+            items.push(convert(&item)?);
+        }
+        Ok(items)
+    } else if let Ok(seq) = value.cast::<PyTuple>() {
+        let mut items = Vec::with_capacity(seq.len());
+        for item in seq.iter() {
+            items.push(convert(&item)?);
+        }
+        Ok(items)
+    } else {
+        Err(expected_list_value())
+    }
+}
+
 fn convert_sequence_to_field_values(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -208,33 +229,10 @@ fn convert_sequence_to_field_values(
     scalar_bindings: &[ScalarBinding],
     abstract_types: &HashSet<String>,
 ) -> PyResult<FieldValue<'static>> {
-    if let Ok(seq) = value.cast::<PyList>() {
-        let mut items = Vec::with_capacity(seq.len());
-        for item in seq.iter() {
-            items.push(py_to_field_value_for_type(
-                py,
-                &item,
-                inner_type,
-                scalar_bindings,
-                abstract_types,
-            )?);
-        }
-        Ok(FieldValue::list(items))
-    } else if let Ok(seq) = value.cast::<PyTuple>() {
-        let mut items = Vec::with_capacity(seq.len());
-        for item in seq.iter() {
-            items.push(py_to_field_value_for_type(
-                py,
-                &item,
-                inner_type,
-                scalar_bindings,
-                abstract_types,
-            )?);
-        }
-        Ok(FieldValue::list(items))
-    } else {
-        Err(expected_list_value())
-    }
+    let items = collect_sequence(value, |item| {
+        py_to_field_value_for_type(py, item, inner_type, scalar_bindings, abstract_types)
+    })?;
+    Ok(FieldValue::list(items))
 }
 
 fn convert_sequence_to_field_values_untyped(
@@ -242,21 +240,8 @@ fn convert_sequence_to_field_values_untyped(
     value: &Bound<'_, PyAny>,
     scalar_bindings: &[ScalarBinding],
 ) -> PyResult<FieldValue<'static>> {
-    if let Ok(seq) = value.cast::<PyList>() {
-        let mut items = Vec::with_capacity(seq.len());
-        for item in seq.iter() {
-            items.push(py_to_field_value(py, &item, scalar_bindings)?);
-        }
-        Ok(FieldValue::list(items))
-    } else if let Ok(seq) = value.cast::<PyTuple>() {
-        let mut items = Vec::with_capacity(seq.len());
-        for item in seq.iter() {
-            items.push(py_to_field_value(py, &item, scalar_bindings)?);
-        }
-        Ok(FieldValue::list(items))
-    } else {
-        Err(expected_list_value())
-    }
+    let items = collect_sequence(value, |item| py_to_field_value(py, item, scalar_bindings))?;
+    Ok(FieldValue::list(items))
 }
 
 pub(crate) fn py_to_value(
@@ -296,18 +281,8 @@ pub(crate) fn py_to_value(
     if let Ok(bytes) = value.cast::<PyBytes>() {
         return Ok(Value::Binary(bytes.as_bytes().to_vec().into()));
     }
-    if let Ok(list) = value.cast::<PyList>() {
-        let mut items = Vec::with_capacity(list.len());
-        for item in list.iter() {
-            items.push(py_to_value(py, &item, scalar_bindings, true)?);
-        }
-        return Ok(Value::List(items));
-    }
-    if let Ok(tuple) = value.cast::<PyTuple>() {
-        let mut items = Vec::with_capacity(tuple.len());
-        for item in tuple.iter() {
-            items.push(py_to_value(py, &item, scalar_bindings, true)?);
-        }
+    if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
+        let items = collect_sequence(value, |item| py_to_value(py, item, scalar_bindings, true))?;
         return Ok(Value::List(items));
     }
     if let Ok(dict) = value.cast::<PyDict>() {

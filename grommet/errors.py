@@ -24,10 +24,6 @@ def schema_requires_query() -> GrommetSchemaError:
     return GrommetSchemaError("Schema requires a query type.")
 
 
-def unknown_type_kind(kind: str) -> GrommetTypeError:
-    return GrommetTypeError(f"Unknown type kind: {kind}")
-
-
 def type_meta_unknown_kind(kind: str) -> GrommetValueError:
     return GrommetValueError(f"Unknown type meta kind: {kind}")
 

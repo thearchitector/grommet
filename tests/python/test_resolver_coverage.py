@@ -5,6 +5,7 @@ import pytest
 
 from grommet.errors import GrommetTypeError
 from grommet.info import Info
+from grommet.metadata import TypeKind
 from grommet.resolver import (
     _is_asyncgen_callable,
     _is_coroutine_callable,
@@ -47,7 +48,7 @@ def test_wrap_resolver_missing_annotation_raises() -> None:
         return value
 
     with pytest.raises(GrommetTypeError):
-        _wrap_resolver(resolver, kind="object", field_name="value")
+        _wrap_resolver(resolver, kind=TypeKind.OBJECT, field_name="value")
 
 
 @pytest.mark.anyio
@@ -59,7 +60,9 @@ async def test_wrap_resolver_info_context_root() -> None:
     async def resolver(parent, info, context, root, value: int) -> tuple:
         return (parent, info.field_name, context, root, value)
 
-    wrapper, arg_defs = _wrap_resolver(resolver, kind="object", field_name="value")
+    wrapper, arg_defs = _wrap_resolver(
+        resolver, kind=TypeKind.OBJECT, field_name="value"
+    )
     assert arg_defs[0]["name"] == "value"
 
     result = await wrapper(
@@ -77,7 +80,7 @@ async def test_wrap_resolver_without_info_and_missing_kwargs() -> None:
     async def resolver(parent, value: int = 5) -> tuple:
         return (parent, value)
 
-    wrapper, _ = _wrap_resolver(resolver, kind="object", field_name="value")
+    wrapper, _ = _wrap_resolver(resolver, kind=TypeKind.OBJECT, field_name="value")
     result = await wrapper("parent", {"field_name": "ignored"})
     assert result == ("parent", 5)
 
@@ -91,7 +94,7 @@ def test_wrap_resolver_requires_async() -> None:
         return 1
 
     with pytest.raises(GrommetTypeError):
-        _wrap_resolver(resolver, kind="object", field_name="value")
+        _wrap_resolver(resolver, kind=TypeKind.OBJECT, field_name="value")
 
 
 @pytest.mark.anyio
@@ -103,7 +106,9 @@ async def test_wrap_subscription_requires_async_iterator() -> None:
     async def resolver(parent, info) -> int:
         return 3
 
-    wrapper, _ = _wrap_resolver(resolver, kind="subscription", field_name="ticks")
+    wrapper, _ = _wrap_resolver(
+        resolver, kind=TypeKind.SUBSCRIPTION, field_name="ticks"
+    )
     with pytest.raises(GrommetTypeError):
         await wrapper("parent", {"field_name": "ticks"})
 
@@ -181,7 +186,7 @@ def test_wrap_resolver_subscription_asyncgen_path() -> None:
         yield 2
 
     wrapper, arg_defs = _wrap_resolver(
-        subscription_gen, kind="subscription", field_name="events"
+        subscription_gen, kind=TypeKind.SUBSCRIPTION, field_name="events"
     )
     assert arg_defs == []
 
@@ -196,6 +201,6 @@ def test_wrap_resolver_subscription_coroutine_path() -> None:
         return gen()
 
     wrapper, arg_defs = _wrap_resolver(
-        subscription_coro, kind="subscription", field_name="events"
+        subscription_coro, kind=TypeKind.SUBSCRIPTION, field_name="events"
     )
     assert arg_defs == []

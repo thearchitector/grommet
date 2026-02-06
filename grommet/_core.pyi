@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from typing import Any
 
 class SubscriptionStream(AsyncIterator[dict[str, Any]]):
@@ -10,12 +10,7 @@ def configure_runtime(
 ) -> bool: ...
 
 class Schema:
-    def __init__(
-        self,
-        definition: dict[str, Any],
-        resolvers: dict[str, Callable[..., Any]],
-        scalar_bindings: list[dict[str, Any]],
-    ) -> None: ...
+    def __init__(self, plan: Any) -> None: ...
     async def execute(
         self,
         query: str,

@@ -7,11 +7,12 @@
 - If the user asks you to generate a plan, generate a new markdown file in the `ai_plans` directory, prefixing it with the next sequential plan number. Always use [PLAN_TEMPLATE.md](./ai_plans/PLAN_TEMPLATE.md) when creating or updating a plan.
 
 ## Development Guidelines
-- Mirror the established architecture, type hints, and docstring style referenced in the pattern guides.
+- Mirror the established architecture, type hints, and docstring style unless explicitly told you may ignore them.
 - Update relevant docs or TODO items when behavior shifts or tasks complete.
-- ALWAYS cover modifications with new or updated unit tests, and address any failures prior to finishing.
+- ALWAYS add a timeout to commands you run to avoid waiting indefinitely.
 - ALWAYS use `uv run` for Python: Use `uv run` when running Python commands. Never run Python directly (e.g., python script.py). Always use `uv run pytest`, `uv run python script.py`, `uv run python -c "..."`, etc. This ensures the correct virtual environment and dependencies are used.
-- ALWAYS verify changes with `prek run -a`. Address any failures prior to finishing.
+- ALWAYS cover modifications with new or updated unit tests, run `pytest` and `cargo test`, and address any failures prior to stopping.
+- ALWAYS verify changes with `prek run -a`. Address any failures prior to stopping.
 
 ## Common Patterns
 

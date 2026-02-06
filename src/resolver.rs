@@ -17,12 +17,13 @@ pub(crate) async fn resolve_field(
     ctx: ResolverContext<'_>,
     field_ctx: Arc<FieldContext>,
 ) -> Result<Option<FieldValue<'_>>, Error> {
-    let value = resolve_python_value(
+    let value = resolve_value(
         ctx,
         field_ctx.resolver.clone(),
         &field_ctx.arg_names,
         &field_ctx.field_name,
         &field_ctx.source_name,
+        false,
     )
     .await?;
     let field_value = Python::attach(|py| {
@@ -42,12 +43,13 @@ pub(crate) async fn resolve_subscription_stream<'a>(
     ctx: ResolverContext<'a>,
     field_ctx: Arc<FieldContext>,
 ) -> Result<BoxStream<'a, Result<FieldValue<'a>, Error>>, Error> {
-    let value = resolve_subscription_value(
+    let value = resolve_value(
         ctx,
         field_ctx.resolver.clone(),
         &field_ctx.arg_names,
         &field_ctx.field_name,
         &field_ctx.source_name,
+        true,
     )
     .await?;
     let iterator =
@@ -102,12 +104,13 @@ fn subscription_stream<'a>(
     Ok(stream.boxed())
 }
 
-async fn resolve_python_value(
+async fn resolve_value(
     ctx: ResolverContext<'_>,
     resolver: Option<PyObj>,
     arg_names: &[String],
     field_name: &str,
     source_name: &str,
+    is_subscription: bool,
 ) -> Result<Py<PyAny>, Error> {
     let (root_value, context, parent) = extract_context(&ctx);
 
@@ -132,45 +135,11 @@ async fn resolve_python_value(
             .map_err(py_err_to_error)?
     };
 
-    if has_resolver {
-        await_value(value).await
-    } else {
-        Ok(value)
+    if !has_resolver {
+        return Ok(value);
     }
-}
 
-async fn resolve_subscription_value(
-    ctx: ResolverContext<'_>,
-    resolver: Option<PyObj>,
-    arg_names: &[String],
-    field_name: &str,
-    source_name: &str,
-) -> Result<Py<PyAny>, Error> {
-    let (root_value, context, parent) = extract_context(&ctx);
-
-    let (value, has_resolver) = if let Some(resolver) = resolver {
-        let value = Python::attach(|py| {
-            call_resolver(
-                py,
-                &ctx,
-                &resolver,
-                &arg_names,
-                field_name,
-                parent.as_ref(),
-                root_value.as_ref(),
-                context.as_ref(),
-            )
-        })
-        .map_err(py_err_to_error)?;
-        (value, true)
-    } else {
-        let parent = parent.ok_or_else(no_parent_value)?;
-        let value = Python::attach(|py| resolve_from_parent(py, &parent, source_name))
-            .map_err(py_err_to_error)?;
-        (value, false)
-    };
-
-    if has_resolver {
+    if is_subscription {
         let (is_async_iter, is_awaitable) = Python::attach(|py| {
             let bound = value.bind(py);
             let is_async_iter = bound.hasattr("__aiter__")? || bound.hasattr("__anext__")?;
@@ -178,12 +147,16 @@ async fn resolve_subscription_value(
             Ok((is_async_iter, is_awaitable))
         })
         .map_err(py_err_to_error)?;
-        if !is_async_iter && is_awaitable {
+        if is_async_iter {
+            return Ok(value);
+        }
+        if is_awaitable {
             return await_value(value).await;
         }
+        return Ok(value);
     }
 
-    Ok(value)
+    await_value(value).await
 }
 
 fn extract_context(ctx: &ResolverContext<'_>) -> (Option<PyObj>, Option<PyObj>, Option<PyObj>) {

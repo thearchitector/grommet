@@ -1,372 +1,222 @@
 use std::collections::HashMap;
 
-use pyo3::exceptions::PyKeyError;
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyDict, PyList, PyTuple};
+use pyo3::types::{PyAnyMethods, PyDict};
 
-use crate::errors::missing_field;
+use async_graphql::dynamic::TypeRef;
+
 use crate::types::{
-    ArgDef, EnumDef, FieldDef, PyObj, ScalarBinding, ScalarDef, SchemaDef, TypeDef, UnionDef,
+    ArgDef, EnumDef, FieldDef, PyObj, ScalarBinding, ScalarDef, SchemaDef, TypeDef, TypeKind,
+    UnionDef,
 };
 
-#[derive(FromPyObject)]
-#[pyo3(from_item_all)]
-struct SchemaListsInput {
-    types: Vec<Py<PyAny>>,
-    #[pyo3(default)]
-    scalars: Option<Vec<ScalarDefInput>>,
-    #[pyo3(default)]
-    enums: Option<Vec<EnumDefInput>>,
-    #[pyo3(default)]
-    unions: Option<Vec<UnionDefInput>>,
-}
-
-#[derive(FromPyObject)]
-#[pyo3(from_item_all)]
-struct SchemaBlockInput {
-    query: String,
-    #[pyo3(default)]
-    mutation: Option<String>,
-    #[pyo3(default)]
-    subscription: Option<String>,
-}
-
-#[derive(FromPyObject)]
-#[pyo3(from_item_all)]
-struct TypeDefInput {
-    kind: String,
-    name: String,
-    fields: Vec<Py<PyAny>>,
-    #[pyo3(default)]
-    description: Option<String>,
-    #[pyo3(default)]
-    implements: Option<Vec<String>>,
-}
-
-#[derive(FromPyObject)]
-#[pyo3(from_item_all)]
-struct FieldDefInput {
-    name: String,
-    #[pyo3(default)]
-    source: Option<String>,
-    r#type: String,
-    #[pyo3(default)]
-    args: Option<Vec<Py<PyAny>>>,
-    #[pyo3(default)]
-    resolver: Option<String>,
-    #[pyo3(default)]
-    description: Option<String>,
-    #[pyo3(default)]
-    deprecation: Option<String>,
-    #[pyo3(default)]
-    default: Option<Py<PyAny>>,
-}
-
-#[derive(FromPyObject)]
-#[pyo3(from_item_all)]
-struct ArgDefInput {
-    name: String,
-    r#type: String,
-    #[pyo3(default)]
-    default: Option<Py<PyAny>>,
-}
-
-#[derive(FromPyObject)]
-#[pyo3(from_item_all)]
-struct EnumDefInput {
-    name: String,
-    #[pyo3(default)]
-    description: Option<String>,
-    values: Vec<String>,
-}
-
-#[derive(FromPyObject)]
-#[pyo3(from_item_all)]
-struct UnionDefInput {
-    name: String,
-    #[pyo3(default)]
-    description: Option<String>,
-    types: Vec<String>,
-}
-
-#[derive(FromPyObject)]
-#[pyo3(from_item_all)]
-struct ScalarDefInput {
-    name: String,
-    #[pyo3(default)]
-    description: Option<String>,
-    #[pyo3(default)]
-    specified_by_url: Option<String>,
-}
-
-#[derive(FromPyObject)]
-#[pyo3(from_item_all)]
-struct ScalarBindingInput {
-    name: String,
-    python_type: Py<PyAny>,
-    serialize: Py<PyAny>,
-}
-
-fn extract_with_missing<'py, T>(item: &Bound<'py, PyAny>, mapping: &[(&str, &str)]) -> PyResult<T>
-where
-    for<'a> T: FromPyObject<'a, 'py, Error = PyErr>,
-{
-    let py = item.py();
-    item.extract()
-        .map_err(|err| map_missing_field(py, err, mapping))
-}
-
-fn map_missing_field(py: Python<'_>, err: PyErr, mapping: &[(&str, &str)]) -> PyErr {
-    if err.is_instance_of::<PyKeyError>(py) {
-        if let Some(key) = key_error_key(py, &err) {
-            if let Some((_, missing)) = mapping.iter().find(|(name, _)| *name == key) {
-                return missing_field(missing);
-            }
-        }
-    }
-    err
-}
-
-fn key_error_key(py: Python<'_>, err: &PyErr) -> Option<String> {
-    let value = err.value(py);
-    if let Ok(args) = value.getattr("args") {
-        if let Ok(args) = args.cast::<PyTuple>() {
-            if let Ok(arg0) = args.get_item(0) {
-                if let Ok(key) = arg0.extract::<String>() {
-                    return Some(key);
-                }
-            }
-        }
-    }
-    if let Ok(key) = value.extract::<String>() {
-        let trimmed = key
-            .strip_prefix('\'')
-            .and_then(|candidate| candidate.strip_suffix('\''));
-        return Some(trimmed.unwrap_or(&key).to_string());
-    }
-    None
-}
-
-// parse python dictionaries into rust structs
-pub(crate) fn parse_resolvers(
-    _py: Python<'_>,
-    resolvers: Option<&Bound<'_, PyDict>>,
-) -> PyResult<HashMap<String, PyObj>> {
-    let mut map = HashMap::new();
-    if let Some(resolvers) = resolvers {
-        for (key, value) in resolvers.iter() {
-            let key: String = key.extract()?;
-            let value = PyObj::new(value.unbind());
-            map.insert(key, value);
-        }
-    }
-    Ok(map)
-}
-
-pub(crate) fn parse_scalar_bindings(
+// extract schema components directly from SchemaPlan dataclass attributes
+pub(crate) fn parse_schema_plan(
     py: Python<'_>,
-    scalars: Option<&Bound<'_, PyAny>>,
-) -> PyResult<Vec<ScalarBinding>> {
-    let list = match scalars {
-        Some(obj) => obj.cast::<PyList>()?.to_owned(),
-        None => PyList::empty(py),
-    };
-    let mut bindings = Vec::with_capacity(list.len());
-    for item in list.iter() {
-        let input: ScalarBindingInput = extract_with_missing(
-            &item,
-            &[
-                ("name", "scalar name"),
-                ("python_type", "python_type"),
-                ("serialize", "serialize"),
-            ],
-        )?;
-        let name = input.name;
-        let py_type = input.python_type;
-        let serialize = input.serialize;
-        bindings.push(ScalarBinding {
-            _name: name,
-            py_type: PyObj::new(py_type),
-            serialize: PyObj::new(serialize),
-        });
-    }
-    Ok(bindings)
-}
-
-pub(crate) fn parse_schema_definition(
-    py: Python<'_>,
-    definition: &Bound<'_, PyAny>,
+    plan: &Bound<'_, PyAny>,
 ) -> PyResult<(
     SchemaDef,
     Vec<TypeDef>,
     Vec<ScalarDef>,
     Vec<EnumDef>,
     Vec<UnionDef>,
+    HashMap<String, PyObj>,
+    Vec<ScalarBinding>,
 )> {
-    let schema = definition
-        .get_item("schema")
-        .map_err(|err| map_missing_field(py, err, &[("schema", "schema")]))?;
-    let schema: SchemaBlockInput = extract_with_missing(&schema, &[("query", "query")])?;
-    let input: SchemaListsInput = extract_with_missing(definition, &[("types", "types")])?;
-    let query = schema.query;
     let schema_def = SchemaDef {
-        query,
-        mutation: schema.mutation,
-        subscription: schema.subscription,
+        query: plan.getattr("query")?.extract()?,
+        mutation: plan.getattr("mutation")?.extract()?,
+        subscription: plan.getattr("subscription")?.extract()?,
     };
 
-    let types = input.types;
-    let mut type_defs = Vec::with_capacity(types.len());
-    for item in types {
-        type_defs.push(parse_type_def(&item.bind(py))?);
+    let no_default = py.import("grommet.plan")?.getattr("_NO_DEFAULT")?;
+    let missing = py.import("grommet.metadata")?.getattr("MISSING")?;
+
+    let types_list: Vec<Py<PyAny>> = plan.getattr("types")?.extract()?;
+    let mut type_defs = Vec::with_capacity(types_list.len());
+    for item in &types_list {
+        type_defs.push(parse_type_plan(py, &item.bind(py), &no_default, &missing)?);
     }
 
-    let scalars = input.scalars.unwrap_or_default();
-    let mut scalar_defs = Vec::with_capacity(scalars.len());
-    for item in scalars {
-        scalar_defs.push(scalar_def_from_input(item)?);
+    let scalars_list: Vec<Py<PyAny>> = plan.getattr("scalars")?.extract()?;
+    let mut scalar_defs = Vec::with_capacity(scalars_list.len());
+    let mut scalar_bindings = Vec::with_capacity(scalars_list.len());
+    for item in &scalars_list {
+        let bound = item.bind(py);
+        let meta = bound.getattr("meta")?;
+        scalar_defs.push(ScalarDef {
+            name: meta.getattr("name")?.extract()?,
+            description: meta.getattr("description")?.extract()?,
+            specified_by_url: meta.getattr("specified_by_url")?.extract()?,
+        });
+        scalar_bindings.push(ScalarBinding {
+            _name: meta.getattr("name")?.extract()?,
+            py_type: PyObj::new(bound.getattr("cls")?.unbind()),
+            serialize: PyObj::new(meta.getattr("serialize")?.unbind()),
+        });
     }
 
-    let enums = input.enums.unwrap_or_default();
-    let mut enum_defs = Vec::with_capacity(enums.len());
-    for item in enums {
-        enum_defs.push(enum_def_from_input(item)?);
+    let enums_list: Vec<Py<PyAny>> = plan.getattr("enums")?.extract()?;
+    let mut enum_defs = Vec::with_capacity(enums_list.len());
+    for item in &enums_list {
+        let bound = item.bind(py);
+        let meta = bound.getattr("meta")?;
+        let cls = bound.getattr("cls")?;
+        let members = cls.getattr("__members__")?;
+        let keys_list: Vec<String> = members
+            .call_method0("keys")?
+            .try_iter()?
+            .map(|k| k?.extract())
+            .collect::<PyResult<_>>()?;
+        enum_defs.push(EnumDef {
+            name: meta.getattr("name")?.extract()?,
+            description: meta.getattr("description")?.extract()?,
+            values: keys_list,
+        });
     }
 
-    let unions = input.unions.unwrap_or_default();
-    let mut union_defs = Vec::with_capacity(unions.len());
-    for item in unions {
-        union_defs.push(union_def_from_input(item)?);
-    }
-
-    Ok((schema_def, type_defs, scalar_defs, enum_defs, union_defs))
-}
-
-#[allow(dead_code)]
-fn parse_type_def(item: &Bound<'_, PyAny>) -> PyResult<TypeDef> {
-    let input: TypeDefInput = extract_with_missing(
-        item,
-        &[
-            ("kind", "type kind"),
-            ("name", "type name"),
-            ("fields", "fields"),
-        ],
-    )?;
-    type_def_from_input(input)
-}
-
-fn type_def_from_input(input: TypeDefInput) -> PyResult<TypeDef> {
-    let mut parsed_fields = Vec::with_capacity(input.fields.len());
-    let fields = input.fields;
-    Python::attach(|py| {
-        for field in fields {
-            parsed_fields.push(parse_field_def(py, &field.bind(py))?);
+    let unions_list: Vec<Py<PyAny>> = plan.getattr("unions")?.extract()?;
+    let mut union_defs = Vec::with_capacity(unions_list.len());
+    for item in &unions_list {
+        let bound = item.bind(py);
+        let meta = bound.getattr("meta")?;
+        let types_tuple: Vec<Py<PyAny>> = meta.getattr("types")?.extract()?;
+        let mut member_names = Vec::with_capacity(types_tuple.len());
+        for t in &types_tuple {
+            let t_meta = t.bind(py).getattr("__grommet_meta__")?;
+            member_names.push(t_meta.getattr("name")?.extract()?);
         }
-        Ok::<(), PyErr>(())
-    })?;
+        union_defs.push(UnionDef {
+            name: meta.getattr("name")?.extract()?,
+            description: meta.getattr("description")?.extract()?,
+            types: member_names,
+        });
+    }
+
+    let resolvers_dict: Bound<'_, PyDict> = plan.getattr("resolvers")?.extract()?;
+    let mut resolver_map = HashMap::new();
+    for (key, value) in resolvers_dict.iter() {
+        resolver_map.insert(key.extract()?, PyObj::new(value.unbind()));
+    }
+
+    Ok((
+        schema_def,
+        type_defs,
+        scalar_defs,
+        enum_defs,
+        union_defs,
+        resolver_map,
+        scalar_bindings,
+    ))
+}
+
+fn parse_type_plan(
+    py: Python<'_>,
+    item: &Bound<'_, PyAny>,
+    no_default: &Bound<'_, PyAny>,
+    missing: &Bound<'_, PyAny>,
+) -> PyResult<TypeDef> {
+    let kind_str: String = item.getattr("kind")?.getattr("value")?.extract()?;
+    let kind = TypeKind::from_str(&kind_str)?;
+    let name: String = item.getattr("name")?.extract()?;
+    let description: Option<String> = item.getattr("description")?.extract()?;
+    let implements: Vec<String> = item.getattr("implements")?.extract()?;
+
+    let fields_list: Vec<Py<PyAny>> = item.getattr("fields")?.extract()?;
+    let mut fields = Vec::with_capacity(fields_list.len());
+    for field_item in &fields_list {
+        fields.push(parse_field_plan(
+            py,
+            &field_item.bind(py),
+            no_default,
+            missing,
+        )?);
+    }
+
     Ok(TypeDef {
-        kind: input.kind,
-        name: input.name,
-        fields: parsed_fields,
-        description: input.description,
-        implements: input.implements.unwrap_or_default(),
+        kind,
+        name,
+        fields,
+        description,
+        implements,
     })
 }
 
-#[allow(dead_code)]
-fn parse_enum_def(item: &Bound<'_, PyAny>) -> PyResult<EnumDef> {
-    let input: EnumDefInput =
-        extract_with_missing(item, &[("name", "enum name"), ("values", "enum values")])?;
-    enum_def_from_input(input)
-}
+fn parse_field_plan(
+    py: Python<'_>,
+    item: &Bound<'_, PyAny>,
+    no_default: &Bound<'_, PyAny>,
+    missing: &Bound<'_, PyAny>,
+) -> PyResult<FieldDef> {
+    let name: String = item.getattr("name")?.extract()?;
+    let source: String = item.getattr("source")?.extract()?;
+    let type_spec = item.getattr("type_spec")?;
+    let type_ref = type_spec_to_type_ref(&type_spec)?;
+    let resolver_key: Option<String> = item.getattr("resolver_key")?.extract()?;
+    let description: Option<String> = item.getattr("description")?.extract()?;
+    let deprecation: Option<String> = item.getattr("deprecation")?.extract()?;
 
-fn enum_def_from_input(input: EnumDefInput) -> PyResult<EnumDef> {
-    Ok(EnumDef {
-        name: input.name,
-        description: input.description,
-        values: input.values,
-    })
-}
+    let default_obj = item.getattr("default")?;
+    let default_value = if default_obj.is(no_default) {
+        None
+    } else {
+        Some(PyObj::new(default_obj.unbind()))
+    };
 
-#[allow(dead_code)]
-fn parse_union_def(item: &Bound<'_, PyAny>) -> PyResult<UnionDef> {
-    let input: UnionDefInput =
-        extract_with_missing(item, &[("name", "union name"), ("types", "union types")])?;
-    union_def_from_input(input)
-}
-
-fn union_def_from_input(input: UnionDefInput) -> PyResult<UnionDef> {
-    Ok(UnionDef {
-        name: input.name,
-        description: input.description,
-        types: input.types,
-    })
-}
-
-#[allow(dead_code)]
-fn parse_scalar_def(item: &Bound<'_, PyAny>) -> PyResult<ScalarDef> {
-    let input: ScalarDefInput = extract_with_missing(item, &[("name", "scalar name")])?;
-    scalar_def_from_input(input)
-}
-
-fn scalar_def_from_input(input: ScalarDefInput) -> PyResult<ScalarDef> {
-    Ok(ScalarDef {
-        name: input.name,
-        description: input.description,
-        specified_by_url: input.specified_by_url,
-    })
-}
-
-#[allow(dead_code)]
-fn parse_field_def(py: Python<'_>, item: &Bound<'_, PyAny>) -> PyResult<FieldDef> {
-    let input: FieldDefInput =
-        extract_with_missing(item, &[("name", "field name"), ("type", "field type")])?;
-    field_def_from_input(py, input)
-}
-
-fn field_def_from_input(py: Python<'_>, input: FieldDefInput) -> PyResult<FieldDef> {
-    let source = input.source.unwrap_or_else(|| input.name.clone());
-    let mut parsed_args = Vec::new();
-    if let Some(args) = input.args {
-        parsed_args = Vec::with_capacity(args.len());
-        for arg in args {
-            parsed_args.push(parse_arg_def(py, &arg.bind(py))?);
-        }
+    let args_list: Vec<Py<PyAny>> = item.getattr("args")?.extract()?;
+    let mut args = Vec::with_capacity(args_list.len());
+    for arg_item in &args_list {
+        args.push(parse_arg_plan(py, &arg_item.bind(py), missing)?);
     }
+
     Ok(FieldDef {
-        name: input.name,
+        name,
         source,
-        type_name: input.r#type,
-        args: parsed_args,
-        resolver: input.resolver,
-        description: input.description,
-        deprecation: input.deprecation,
-        default_value: input.default.map(PyObj::new),
+        type_ref,
+        args,
+        resolver: resolver_key,
+        description,
+        deprecation,
+        default_value,
     })
 }
 
-#[allow(dead_code)]
-fn parse_arg_def(_py: Python<'_>, item: &Bound<'_, PyAny>) -> PyResult<ArgDef> {
-    let input: ArgDefInput =
-        extract_with_missing(item, &[("name", "arg name"), ("type", "arg type")])?;
-    arg_def_from_input(input)
-}
+fn parse_arg_plan(
+    _py: Python<'_>,
+    item: &Bound<'_, PyAny>,
+    missing: &Bound<'_, PyAny>,
+) -> PyResult<ArgDef> {
+    let name: String = item.getattr("name")?.extract()?;
+    let type_spec = item.getattr("type_spec")?;
+    let type_ref = type_spec_to_type_ref(&type_spec)?;
 
-fn arg_def_from_input(input: ArgDefInput) -> PyResult<ArgDef> {
+    let default_obj = item.getattr("default")?;
+    let default_value = if default_obj.is(missing) {
+        None
+    } else {
+        Some(PyObj::new(default_obj.unbind()))
+    };
+
     Ok(ArgDef {
-        name: input.name,
-        type_name: input.r#type,
-        default_value: input.default.map(PyObj::new),
+        name,
+        type_ref,
+        default_value,
     })
 }
 
-#[allow(dead_code)]
-fn extract_optional_string(item: Option<Bound<'_, PyAny>>) -> Option<String> {
-    item.and_then(|value| {
-        if value.is_none() {
-            None
-        } else {
-            value.extract().ok()
-        }
+fn type_spec_to_type_ref(spec: &Bound<'_, PyAny>) -> PyResult<TypeRef> {
+    let kind: String = spec.getattr("kind")?.extract()?;
+    let nullable: bool = spec.getattr("nullable")?.extract()?;
+    let ty = if kind == "list" {
+        let inner = spec.getattr("of_type")?;
+        TypeRef::List(Box::new(type_spec_to_type_ref(&inner)?))
+    } else {
+        let name: String = spec.getattr("name")?.extract()?;
+        TypeRef::named(name)
+    };
+    Ok(if nullable {
+        ty
+    } else {
+        TypeRef::NonNull(Box::new(ty))
     })
 }

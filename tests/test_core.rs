@@ -36,12 +36,6 @@ mod errors {
             assert!(crate::with_py(|py| err.is_instance_of::<PyValueError>(py)));
             assert_eq!(err_message(&err), "nope");
 
-            let err = missing_field("query");
-            assert_eq!(err_message(&err), "Missing query");
-
-            let err = unknown_type_kind("mystery");
-            assert_eq!(err_message(&err), "Unknown type kind: mystery");
-
             let err = subscription_requires_async_iterator();
             assert!(crate::with_py(|py| err.is_instance_of::<PyTypeError>(py)));
 
@@ -771,25 +765,37 @@ mod parse {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use pyo3::IntoPyObject;
+        use pyo3::types::PyDict;
 
-        fn err_message(err: PyErr) -> String {
-            crate::with_py(|py| err.value(py).str().unwrap().to_str().unwrap().to_string())
-        }
-
-        /// Verifies parsing schema definitions and resolvers builds expected structs.
+        /// Verifies parse_schema_plan extracts plan dataclass attributes correctly.
         #[test]
-        fn parse_definitions_and_resolvers() {
+        fn parse_schema_plan_round_trip() {
             crate::with_py(|py| {
                 let locals = PyDict::new(py);
                 py.run(
                     pyo3::ffi::c_str!(
                         r#"
-class Root:
-    pass
+from grommet.plan import SchemaPlan, TypePlan, FieldPlan, ArgPlan
+from grommet.metadata import TypeKind, TypeSpec
 
-def resolver(parent, info, value: int = 1):
-    return value
+async def resolver(parent, info):
+    return 1
+
+plan = SchemaPlan(
+    query="Query", mutation=None, subscription=None,
+    types=(
+        TypePlan(kind=TypeKind.OBJECT, name="Query", cls=object, fields=(
+            FieldPlan(name="value", source="value",
+                      type_spec=TypeSpec(kind="named", name="Int", nullable=True),
+                      args=(ArgPlan(name="limit",
+                                    type_spec=TypeSpec(kind="named", name="Int", nullable=True),
+                                    default=10),),
+                      resolver_key="Query.value"),
+        )),
+    ),
+    scalars=(), enums=(), unions=(),
+    resolvers={"Query.value": resolver},
+)
 "#
                     ),
                     None,
@@ -797,263 +803,92 @@ def resolver(parent, info, value: int = 1):
                 )
                 .unwrap();
 
-                let resolver = locals.get_item("resolver").unwrap().unwrap();
-                let resolvers = PyDict::new(py);
-                resolvers.set_item("Query.value", &resolver).unwrap();
-                let map = parse_resolvers(py, Some(&resolvers)).unwrap();
-                assert_eq!(map.len(), 1);
-
-                let scalar_list = PyList::empty(py);
-                let scalar_def = PyDict::new(py);
-                scalar_def.set_item("name", "Scalar").unwrap();
-                scalar_def
-                    .set_item("python_type", locals.get_item("Root").unwrap().unwrap())
-                    .unwrap();
-                scalar_def.set_item("serialize", &resolver).unwrap();
-                scalar_list.append(scalar_def).unwrap();
-                let bindings = parse_scalar_bindings(py, Some(&scalar_list)).unwrap();
-                assert_eq!(bindings.len(), 1);
-
-                let field = PyDict::new(py);
-                field.set_item("name", "value").unwrap();
-                field.set_item("type", "Int").unwrap();
-                let args = PyList::empty(py);
-                let arg = PyDict::new(py);
-                arg.set_item("name", "value").unwrap();
-                arg.set_item("type", "Int").unwrap();
-                arg.set_item("default", 1).unwrap();
-                args.append(arg).unwrap();
-                field.set_item("args", args).unwrap();
-
-                let type_def = PyDict::new(py);
-                type_def.set_item("kind", "object").unwrap();
-                type_def.set_item("name", "Query").unwrap();
-                let fields = PyList::new(py, [field]).unwrap();
-                type_def.set_item("fields", fields).unwrap();
-
-                let schema = PyDict::new(py);
-                schema.set_item("query", "Query").unwrap();
-                let definition = PyDict::new(py);
-                definition.set_item("schema", schema).unwrap();
-                let types = PyList::new(py, [type_def]).unwrap();
-                definition.set_item("types", types).unwrap();
-                definition.set_item("scalars", PyList::empty(py)).unwrap();
-                definition.set_item("enums", PyList::empty(py)).unwrap();
-                definition.set_item("unions", PyList::empty(py)).unwrap();
-
-                let (schema_def, type_defs, _, _, _) =
-                    parse_schema_definition(py, &definition.into_any()).unwrap();
+                let plan = locals.get_item("plan").unwrap().unwrap();
+                let (schema_def, type_defs, _, _, _, resolver_map, _) =
+                    parse_schema_plan(py, &plan).unwrap();
                 assert_eq!(schema_def.query, "Query");
                 assert_eq!(type_defs.len(), 1);
+                assert_eq!(type_defs[0].name, "Query");
+                assert_eq!(type_defs[0].fields[0].name, "value");
+                assert_eq!(type_defs[0].fields[0].args[0].name, "limit");
+                assert!(type_defs[0].fields[0].args[0].default_value.is_some());
+                assert_eq!(resolver_map.len(), 1);
+                assert!(resolver_map.contains_key("Query.value"));
             });
         }
 
-        /// Ensures optional schema definition fields are parsed when provided.
+        /// Ensures all optional plan fields are extracted correctly.
         #[test]
-        fn parse_definition_with_optional_fields() {
+        fn parse_schema_plan_with_optional_fields() {
             crate::with_py(|py| {
-                let empty = parse_resolvers(py, None).unwrap();
-                assert!(empty.is_empty());
+                let locals = PyDict::new(py);
+                py.run(
+                    pyo3::ffi::c_str!(
+                        r#"
+import enum
+from grommet.plan import SchemaPlan, TypePlan, FieldPlan, ArgPlan, ScalarPlan, EnumPlan, UnionPlan
+from grommet.metadata import TypeKind, TypeSpec, ScalarMeta, EnumMeta, UnionMeta
 
-                let none = extract_optional_string(Some(py.None().into_bound(py)));
-                assert!(none.is_none());
+async def resolver(parent, info):
+    return 1
 
-                let arg = PyDict::new(py);
-                arg.set_item("name", "limit").unwrap();
-                arg.set_item("type", "Int").unwrap();
-                arg.set_item("default", 3).unwrap();
-                let args = PyList::new(py, [arg]).unwrap();
+class Color(enum.Enum):
+    RED = "RED"
+    BLUE = "BLUE"
 
-                let field = PyDict::new(py);
-                field.set_item("name", "value").unwrap();
-                field.set_item("type", "String").unwrap();
-                field.set_item("resolver", "Query.value").unwrap();
-                field.set_item("description", "field desc").unwrap();
-                field.set_item("deprecation", "old").unwrap();
-                field.set_item("default", "hello").unwrap();
-                field.set_item("args", args).unwrap();
+class QueryType:
+    pass
+QueryType.__grommet_meta__ = type('M', (), {'name': 'Query'})()
 
-                let type_def = PyDict::new(py);
-                type_def.set_item("kind", "object").unwrap();
-                type_def.set_item("name", "Query").unwrap();
-                type_def.set_item("description", "type desc").unwrap();
-                let implements = PyList::new(py, ["Node"]).unwrap();
-                type_def.set_item("implements", implements).unwrap();
-                let fields = PyList::new(py, [field]).unwrap();
-                type_def.set_item("fields", fields).unwrap();
+plan = SchemaPlan(
+    query="Query", mutation="Mutation", subscription="Subscription",
+    types=(
+        TypePlan(kind=TypeKind.OBJECT, name="Query", cls=object, fields=(
+            FieldPlan(name="value", source="value",
+                      type_spec=TypeSpec(kind="named", name="String", nullable=True),
+                      resolver_key="Query.value",
+                      description="field desc", deprecation="old"),
+        ), implements=("Node",), description="type desc"),
+    ),
+    scalars=(
+        ScalarPlan(cls=object, meta=ScalarMeta(
+            name="Date", serialize=str, parse_value=str,
+            description="date scalar", specified_by_url="https://example.com/date")),
+    ),
+    enums=(
+        EnumPlan(cls=Color, meta=EnumMeta(name="Color", description="colors")),
+    ),
+    unions=(
+        UnionPlan(cls=object, meta=UnionMeta(
+            name="Search", types=(QueryType,), description="search")),
+    ),
+    resolvers={"Query.value": resolver},
+)
+"#
+                    ),
+                    None,
+                    Some(&locals),
+                )
+                .unwrap();
 
-                let scalar_def = PyDict::new(py);
-                scalar_def.set_item("name", "Date").unwrap();
-                scalar_def.set_item("description", "date scalar").unwrap();
-                scalar_def
-                    .set_item("specified_by_url", "https://example.com/date")
-                    .unwrap();
-
-                let enum_def = PyDict::new(py);
-                enum_def.set_item("name", "Color").unwrap();
-                enum_def.set_item("description", "colors").unwrap();
-                let enum_values = PyList::new(py, ["RED", "BLUE"]).unwrap();
-                enum_def.set_item("values", enum_values).unwrap();
-
-                let union_def = PyDict::new(py);
-                union_def.set_item("name", "Search").unwrap();
-                union_def.set_item("description", "search").unwrap();
-                let union_types = PyList::new(py, ["Query"]).unwrap();
-                union_def.set_item("types", union_types).unwrap();
-
-                let schema = PyDict::new(py);
-                schema.set_item("query", "Query").unwrap();
-                schema.set_item("mutation", "Mutation").unwrap();
-                schema.set_item("subscription", "Subscription").unwrap();
-
-                let definition = PyDict::new(py);
-                definition.set_item("schema", schema).unwrap();
-                definition
-                    .set_item("types", PyList::new(py, [type_def]).unwrap())
-                    .unwrap();
-                definition
-                    .set_item("scalars", PyList::new(py, [scalar_def]).unwrap())
-                    .unwrap();
-                definition
-                    .set_item("enums", PyList::new(py, [enum_def]).unwrap())
-                    .unwrap();
-                definition
-                    .set_item("unions", PyList::new(py, [union_def]).unwrap())
-                    .unwrap();
-
-                let (schema_def, type_defs, scalar_defs, enum_defs, union_defs) =
-                    parse_schema_definition(py, &definition.into_any()).unwrap();
+                let plan = locals.get_item("plan").unwrap().unwrap();
+                let (schema_def, type_defs, scalar_defs, enum_defs, union_defs, _, bindings) =
+                    parse_schema_plan(py, &plan).unwrap();
                 assert_eq!(schema_def.mutation.as_deref(), Some("Mutation"));
                 assert_eq!(schema_def.subscription.as_deref(), Some("Subscription"));
                 assert_eq!(type_defs[0].description.as_deref(), Some("type desc"));
                 assert_eq!(type_defs[0].implements, vec!["Node".to_string()]);
-                assert!(type_defs[0].fields[0].default_value.is_some());
-                assert!(type_defs[0].fields[0].args[0].default_value.is_some());
+                assert_eq!(
+                    type_defs[0].fields[0].description.as_deref(),
+                    Some("field desc")
+                );
                 assert_eq!(scalar_defs[0].description.as_deref(), Some("date scalar"));
                 assert_eq!(
                     enum_defs[0].values,
                     vec!["RED".to_string(), "BLUE".to_string()]
                 );
                 assert_eq!(union_defs[0].types, vec!["Query".to_string()]);
-            });
-        }
-
-        /// Verifies missing schema fields raise expected parse errors.
-        #[test]
-        fn parse_missing_fields_report_errors() {
-            crate::with_py(|py| {
-                let empty = PyDict::new(py);
-                let err = parse_schema_definition(py, &empty.into_any())
-                    .err()
-                    .unwrap();
-                assert_eq!(err_message(err), "Missing schema");
-
-                let schema = PyDict::new(py);
-                schema.set_item("schema", PyDict::new(py)).unwrap();
-                let err = parse_schema_definition(py, &schema.into_any())
-                    .err()
-                    .unwrap();
-                assert_eq!(err_message(err), "Missing query");
-
-                let schema = PyDict::new(py);
-                let schema_block = PyDict::new(py);
-                schema_block.set_item("query", "Query").unwrap();
-                schema.set_item("schema", schema_block).unwrap();
-                let err = parse_schema_definition(py, &schema.into_any())
-                    .err()
-                    .unwrap();
-                assert_eq!(err_message(err), "Missing types");
-
-                let type_dict = PyDict::new(py);
-                let err = parse_type_def(&type_dict.into_any()).err().unwrap();
-                assert_eq!(err_message(err), "Missing type kind");
-
-                let type_dict = PyDict::new(py);
-                type_dict.set_item("kind", "object").unwrap();
-                let err = parse_type_def(&type_dict.into_any()).err().unwrap();
-                assert_eq!(err_message(err), "Missing type name");
-
-                let type_dict = PyDict::new(py);
-                type_dict.set_item("kind", "object").unwrap();
-                type_dict.set_item("name", "Query").unwrap();
-                let err = parse_type_def(&type_dict.into_any()).err().unwrap();
-                assert_eq!(err_message(err), "Missing fields");
-
-                let enum_dict = PyDict::new(py);
-                let err = parse_enum_def(&enum_dict.into_any()).err().unwrap();
-                assert_eq!(err_message(err), "Missing enum name");
-
-                let enum_dict = PyDict::new(py);
-                enum_dict.set_item("name", "Color").unwrap();
-                let err = parse_enum_def(&enum_dict.into_any()).err().unwrap();
-                assert_eq!(err_message(err), "Missing enum values");
-
-                let union_dict = PyDict::new(py);
-                let err = parse_union_def(&union_dict.into_any()).err().unwrap();
-                assert_eq!(err_message(err), "Missing union name");
-
-                let union_dict = PyDict::new(py);
-                union_dict.set_item("name", "Union").unwrap();
-                let err = parse_union_def(&union_dict.into_any()).err().unwrap();
-                assert_eq!(err_message(err), "Missing union types");
-
-                let scalar_dict = PyDict::new(py);
-                let err = parse_scalar_def(&scalar_dict.into_any()).err().unwrap();
-                assert_eq!(err_message(err), "Missing scalar name");
-
-                let field_dict = PyDict::new(py);
-                let err = parse_field_def(py, &field_dict.into_any()).err().unwrap();
-                assert_eq!(err_message(err), "Missing field name");
-
-                let field_dict = PyDict::new(py);
-                field_dict.set_item("name", "value").unwrap();
-                let err = parse_field_def(py, &field_dict.into_any()).err().unwrap();
-                assert_eq!(err_message(err), "Missing field type");
-
-                let arg_dict = PyDict::new(py);
-                let err = parse_arg_def(py, &arg_dict.into_any()).err().unwrap();
-                assert_eq!(err_message(err), "Missing arg name");
-
-                let arg_dict = PyDict::new(py);
-                arg_dict.set_item("name", "value").unwrap();
-                let err = parse_arg_def(py, &arg_dict.into_any()).err().unwrap();
-                assert_eq!(err_message(err), "Missing arg type");
-
-                let scalar_list = PyList::empty(py);
-                let dict = PyDict::new(py);
-                dict.set_item("python_type", py.None()).unwrap();
-                dict.set_item("serialize", py.None()).unwrap();
-                scalar_list.append(dict).unwrap();
-                let err = parse_scalar_bindings(py, Some(&scalar_list)).err().unwrap();
-                assert_eq!(err_message(err), "Missing scalar name");
-
-                let scalar_list = PyList::empty(py);
-                let dict = PyDict::new(py);
-                dict.set_item("name", "Scalar").unwrap();
-                dict.set_item("serialize", py.None()).unwrap();
-                scalar_list.append(dict).unwrap();
-                let err = parse_scalar_bindings(py, Some(&scalar_list)).err().unwrap();
-                assert_eq!(err_message(err), "Missing python_type");
-
-                let scalar_list = PyList::empty(py);
-                let dict = PyDict::new(py);
-                dict.set_item("name", "Scalar").unwrap();
-                dict.set_item("python_type", py.None()).unwrap();
-                scalar_list.append(dict).unwrap();
-                let err = parse_scalar_bindings(py, Some(&scalar_list)).err().unwrap();
-                assert_eq!(err_message(err), "Missing serialize");
-            });
-        }
-
-        /// Verifies optional string extraction handles None and string values.
-        #[test]
-        fn extract_optional_string_handles_none() {
-            crate::with_py(|py| {
-                let none = extract_optional_string(None);
-                assert!(none.is_none());
-                let value =
-                    extract_optional_string(Some("hi".into_pyobject(py).unwrap().into_any()));
-                assert_eq!(value, Some("hi".to_string()));
+                assert_eq!(bindings.len(), 1);
             });
         }
     }
@@ -1068,61 +903,9 @@ mod build {
         use crate::types::{
             ArgDef, EnumDef, FieldDef, PyObj, ScalarDef, SchemaDef, TypeDef, UnionDef,
         };
-        use pyo3::types::{PyAnyMethods, PyDict, PyInt, PyStringMethods};
+        use async_graphql::dynamic::TypeRef;
+        use pyo3::types::{PyDict, PyInt};
         use std::collections::HashMap;
-
-        /// Verifies parsing of list and non-null type reference modifiers.
-        #[test]
-        fn parse_type_ref_covers_list_and_non_null() {
-            let ty = parse_type_ref("String!");
-            match ty {
-                TypeRef::NonNull(inner) => match *inner {
-                    TypeRef::Named(name) => assert_eq!(name.as_ref(), "String"),
-                    _ => panic!("unexpected inner"),
-                },
-                _ => panic!("expected non-null"),
-            }
-
-            let ty = parse_type_ref("[Int]");
-            match ty {
-                TypeRef::List(inner) => match *inner {
-                    TypeRef::Named(name) => assert_eq!(name.as_ref(), "Int"),
-                    _ => panic!("unexpected inner"),
-                },
-                _ => panic!("expected list"),
-            }
-        }
-
-        /// Ensures schema building rejects unknown type kinds.
-        #[test]
-        fn build_schema_unknown_kind_errors() {
-            let schema_def = SchemaDef {
-                query: "Query".to_string(),
-                mutation: None,
-                subscription: None,
-            };
-            let type_defs = vec![TypeDef {
-                kind: "mystery".to_string(),
-                name: "Query".to_string(),
-                fields: Vec::new(),
-                description: None,
-                implements: Vec::new(),
-            }];
-            let err = build_schema(
-                schema_def,
-                type_defs,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                HashMap::new(),
-                Arc::new(Vec::new()),
-            )
-            .err()
-            .unwrap();
-            let msg =
-                crate::with_py(|py| err.value(py).str().unwrap().to_str().unwrap().to_string());
-            assert_eq!(msg, "Unknown type kind: mystery");
-        }
 
         /// Verifies input field defaults are applied during schema construction.
         #[test]
@@ -1131,7 +914,7 @@ mod build {
                 let field_def = FieldDef {
                     name: "value".to_string(),
                     source: "value".to_string(),
-                    type_name: "Int".to_string(),
+                    type_ref: TypeRef::named("Int"),
                     args: Vec::new(),
                     resolver: None,
                     description: None,
@@ -1176,14 +959,14 @@ def resolver(parent, info, limit: int = 1):
                 let default_value = PyObj::new(PyInt::new(py, 2).into_any().unbind());
                 let make_arg = || ArgDef {
                     name: "limit".to_string(),
-                    type_name: "Int".to_string(),
+                    type_ref: TypeRef::named("Int"),
                     default_value: Some(default_value.clone()),
                 };
 
                 let query_field = FieldDef {
                     name: "value".to_string(),
                     source: "value".to_string(),
-                    type_name: "String".to_string(),
+                    type_ref: TypeRef::named("String"),
                     args: vec![make_arg()],
                     resolver: Some("Query.value".to_string()),
                     description: Some("field desc".to_string()),
@@ -1194,7 +977,7 @@ def resolver(parent, info, limit: int = 1):
                 let id_field = FieldDef {
                     name: "id".to_string(),
                     source: "id".to_string(),
-                    type_name: "ID!".to_string(),
+                    type_ref: TypeRef::NonNull(Box::new(TypeRef::named("ID"))),
                     args: Vec::new(),
                     resolver: None,
                     description: None,
@@ -1205,7 +988,7 @@ def resolver(parent, info, limit: int = 1):
                 let interface_field = FieldDef {
                     name: "id".to_string(),
                     source: "id".to_string(),
-                    type_name: "ID!".to_string(),
+                    type_ref: TypeRef::NonNull(Box::new(TypeRef::named("ID"))),
                     args: vec![make_arg()],
                     resolver: None,
                     description: Some("iface field".to_string()),
@@ -1216,7 +999,7 @@ def resolver(parent, info, limit: int = 1):
                 let subscription_field = FieldDef {
                     name: "ticks".to_string(),
                     source: "ticks".to_string(),
-                    type_name: "Int!".to_string(),
+                    type_ref: TypeRef::NonNull(Box::new(TypeRef::named("Int"))),
                     args: vec![make_arg()],
                     resolver: Some("Subscription.ticks".to_string()),
                     description: Some("sub field".to_string()),
@@ -1227,7 +1010,7 @@ def resolver(parent, info, limit: int = 1):
                 let input_field = FieldDef {
                     name: "count".to_string(),
                     source: "count".to_string(),
-                    type_name: "Int".to_string(),
+                    type_ref: TypeRef::named("Int"),
                     args: Vec::new(),
                     resolver: None,
                     description: None,
@@ -1243,28 +1026,28 @@ def resolver(parent, info, limit: int = 1):
 
                 let type_defs = vec![
                     TypeDef {
-                        kind: "interface".to_string(),
+                        kind: TypeKind::Interface,
                         name: "Node".to_string(),
                         fields: vec![interface_field],
                         description: Some("iface".to_string()),
                         implements: Vec::new(),
                     },
                     TypeDef {
-                        kind: "object".to_string(),
+                        kind: TypeKind::Object,
                         name: "Query".to_string(),
                         fields: vec![id_field, query_field],
                         description: Some("query desc".to_string()),
                         implements: vec!["Node".to_string()],
                     },
                     TypeDef {
-                        kind: "subscription".to_string(),
+                        kind: TypeKind::Subscription,
                         name: "Subscription".to_string(),
                         fields: vec![subscription_field],
                         description: Some("sub desc".to_string()),
                         implements: Vec::new(),
                     },
                     TypeDef {
-                        kind: "input".to_string(),
+                        kind: TypeKind::Input,
                         name: "InputData".to_string(),
                         fields: vec![input_field],
                         description: Some("input desc".to_string()),
@@ -1318,135 +1101,117 @@ mod api {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use pyo3::types::{PyAnyMethods, PyList, PyStringMethods};
+        use pyo3::types::{PyAnyMethods, PyDict, PyList, PyStringMethods};
 
-        fn build_definition_with_args(py: Python<'_>) -> (Py<PyAny>, Py<PyDict>) {
+        fn build_plan_with_args(py: Python<'_>) -> Py<PyAny> {
             let locals = PyDict::new(py);
             py.run(
                 pyo3::ffi::c_str!(
                     r#"
+from grommet.plan import SchemaPlan, TypePlan, FieldPlan, ArgPlan
+from grommet.metadata import TypeKind, TypeSpec, MISSING
+
 async def greet(parent, info, name: str):
     return f"{info['root']['prefix']}{name}{info['context']['suffix']}"
 
 async def ticks(parent, info, limit: int):
     for i in range(limit):
         yield i
+
+plan = SchemaPlan(
+    query="Query", mutation=None, subscription="Subscription",
+    types=(
+        TypePlan(kind=TypeKind.OBJECT, name="Query", cls=object, fields=(
+            FieldPlan(name="greet", source="greet",
+                      type_spec=TypeSpec(kind="named", name="String"),
+                      args=(ArgPlan(name="name",
+                                    type_spec=TypeSpec(kind="named", name="String"),
+                                    default=MISSING),),
+                      resolver_key="Query.greet"),
+        )),
+        TypePlan(kind=TypeKind.SUBSCRIPTION, name="Subscription", cls=object, fields=(
+            FieldPlan(name="ticks", source="ticks",
+                      type_spec=TypeSpec(kind="named", name="Int"),
+                      args=(ArgPlan(name="limit",
+                                    type_spec=TypeSpec(kind="named", name="Int"),
+                                    default=MISSING),),
+                      resolver_key="Subscription.ticks"),
+        )),
+    ),
+    scalars=(), enums=(), unions=(),
+    resolvers={"Query.greet": greet, "Subscription.ticks": ticks},
+)
 "#
                 ),
                 None,
                 Some(&locals),
             )
             .unwrap();
-
-            let greet_resolver = locals.get_item("greet").unwrap().unwrap();
-            let tick_resolver = locals.get_item("ticks").unwrap().unwrap();
-
-            let arg_name = PyDict::new(py);
-            arg_name.set_item("name", "name").unwrap();
-            arg_name.set_item("type", "String!").unwrap();
-            let query_args = PyList::new(py, [arg_name]).unwrap();
-
-            let query_field = PyDict::new(py);
-            query_field.set_item("name", "greet").unwrap();
-            query_field.set_item("source", "greet").unwrap();
-            query_field.set_item("type", "String!").unwrap();
-            query_field.set_item("resolver", "Query.greet").unwrap();
-            query_field.set_item("args", query_args).unwrap();
-
-            let arg_limit = PyDict::new(py);
-            arg_limit.set_item("name", "limit").unwrap();
-            arg_limit.set_item("type", "Int!").unwrap();
-            let sub_args = PyList::new(py, [arg_limit]).unwrap();
-
-            let sub_field = PyDict::new(py);
-            sub_field.set_item("name", "ticks").unwrap();
-            sub_field.set_item("source", "ticks").unwrap();
-            sub_field.set_item("type", "Int!").unwrap();
-            sub_field
-                .set_item("resolver", "Subscription.ticks")
-                .unwrap();
-            sub_field.set_item("args", sub_args).unwrap();
-
-            let query_def = PyDict::new(py);
-            query_def.set_item("kind", "object").unwrap();
-            query_def.set_item("name", "Query").unwrap();
-            let query_fields = PyList::new(py, [query_field]).unwrap();
-            query_def.set_item("fields", query_fields).unwrap();
-
-            let subscription_def = PyDict::new(py);
-            subscription_def.set_item("kind", "subscription").unwrap();
-            subscription_def.set_item("name", "Subscription").unwrap();
-            let subscription_fields = PyList::new(py, [sub_field]).unwrap();
-            subscription_def
-                .set_item("fields", subscription_fields)
-                .unwrap();
-
-            let schema = PyDict::new(py);
-            schema.set_item("query", "Query").unwrap();
-            schema.set_item("subscription", "Subscription").unwrap();
-
-            let definition = PyDict::new(py);
-            definition.set_item("schema", schema).unwrap();
-            let types = PyList::new(py, [query_def, subscription_def]).unwrap();
-            definition.set_item("types", types).unwrap();
-
-            let resolvers = PyDict::new(py);
-            resolvers.set_item("Query.greet", greet_resolver).unwrap();
-            resolvers
-                .set_item("Subscription.ticks", tick_resolver)
-                .unwrap();
-
-            (definition.into_any().unbind(), resolvers.unbind())
+            locals.get_item("plan").unwrap().unwrap().unbind()
         }
 
-        fn build_subscription_definition(
+        fn build_subscription_plan(
             py: Python<'_>,
             query_resolver: &Bound<'_, PyAny>,
             subscription_resolver: &Bound<'_, PyAny>,
             field_type: &str,
-        ) -> (Py<PyAny>, Py<PyDict>) {
-            let query_field = PyDict::new(py);
-            query_field.set_item("name", "noop").unwrap();
-            query_field.set_item("source", "noop").unwrap();
-            query_field.set_item("type", "Int!").unwrap();
-            query_field.set_item("resolver", "Query.noop").unwrap();
-
-            let sub_field = PyDict::new(py);
-            sub_field.set_item("name", "tick").unwrap();
-            sub_field.set_item("source", "tick").unwrap();
-            sub_field.set_item("type", field_type).unwrap();
-            sub_field.set_item("resolver", "Subscription.tick").unwrap();
-
-            let query_def = PyDict::new(py);
-            query_def.set_item("kind", "object").unwrap();
-            query_def.set_item("name", "Query").unwrap();
-            let query_fields = PyList::new(py, [query_field]).unwrap();
-            query_def.set_item("fields", query_fields).unwrap();
-
-            let subscription_def = PyDict::new(py);
-            subscription_def.set_item("kind", "subscription").unwrap();
-            subscription_def.set_item("name", "Subscription").unwrap();
-            let subscription_fields = PyList::new(py, [sub_field]).unwrap();
-            subscription_def
-                .set_item("fields", subscription_fields)
+        ) -> Py<PyAny> {
+            let locals = PyDict::new(py);
+            locals.set_item("query_resolver", query_resolver).unwrap();
+            locals
+                .set_item("subscription_resolver", subscription_resolver)
                 .unwrap();
+            // Build the TypeSpec for the subscription field type in Rust,
+            // then pass the pre-built object to Python.
+            let type_spec = {
+                let meta = py.import("grommet.metadata").unwrap();
+                let ts_cls = meta.getattr("TypeSpec").unwrap();
+                let mut name = field_type;
+                let non_null = name.ends_with('!');
+                if non_null {
+                    name = &name[..name.len() - 1];
+                }
+                if name.starts_with('[') && name.ends_with(']') {
+                    let inner_name = &name[1..name.len() - 1];
+                    let inner = ts_cls
+                        .call1(("named", inner_name, py.None(), true))
+                        .unwrap();
+                    ts_cls.call1(("list", py.None(), inner, !non_null)).unwrap()
+                } else {
+                    ts_cls.call1(("named", name, py.None(), !non_null)).unwrap()
+                }
+            };
+            locals.set_item("tick_type_spec", &type_spec).unwrap();
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+from grommet.plan import SchemaPlan, TypePlan, FieldPlan
+from grommet.metadata import TypeKind, TypeSpec
 
-            let schema = PyDict::new(py);
-            schema.set_item("query", "Query").unwrap();
-            schema.set_item("subscription", "Subscription").unwrap();
-
-            let definition = PyDict::new(py);
-            definition.set_item("schema", schema).unwrap();
-            let types = PyList::new(py, [query_def, subscription_def]).unwrap();
-            definition.set_item("types", types).unwrap();
-
-            let resolvers = PyDict::new(py);
-            resolvers.set_item("Query.noop", query_resolver).unwrap();
-            resolvers
-                .set_item("Subscription.tick", subscription_resolver)
-                .unwrap();
-
-            (definition.into_any().unbind(), resolvers.unbind())
+plan = SchemaPlan(
+    query="Query", mutation=None, subscription="Subscription",
+    types=(
+        TypePlan(kind=TypeKind.OBJECT, name="Query", cls=object, fields=(
+            FieldPlan(name="noop", source="noop",
+                      type_spec=TypeSpec(kind="named", name="Int"),
+                      resolver_key="Query.noop"),
+        )),
+        TypePlan(kind=TypeKind.SUBSCRIPTION, name="Subscription", cls=object, fields=(
+            FieldPlan(name="tick", source="tick",
+                      type_spec=tick_type_spec,
+                      resolver_key="Subscription.tick"),
+        )),
+    ),
+    scalars=(), enums=(), unions=(),
+    resolvers={"Query.noop": query_resolver, "Subscription.tick": subscription_resolver},
+)
+"#
+                ),
+                None,
+                Some(&locals),
+            )
+            .unwrap();
+            locals.get_item("plan").unwrap().unwrap().unbind()
         }
 
         fn assert_response_has_errors(response: &Bound<'_, PyAny>) {
@@ -1461,7 +1226,7 @@ async def ticks(parent, info, limit: int):
         /// Verifies SchemaWrapper executes queries and subscriptions with variables.
         #[test]
         fn schema_wrapper_executes_and_subscribes_with_variables() {
-            let (schema, resolvers) = crate::with_py(|py| build_definition_with_args(py));
+            let plan = crate::with_py(|py| build_plan_with_args(py));
             crate::with_py(|py| {
                 let query_vars = PyDict::new(py);
                 query_vars.set_item("name", "Ada").unwrap();
@@ -1480,9 +1245,7 @@ async def ticks(parent, info, limit: int):
                 let context = context.into_any().unbind();
 
                 pyo3_async_runtimes::tokio::run(py, async move {
-                    let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(py, &schema.bind(py), Some(&resolvers.bind(py)), None)
-                    })?;
+                    let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
                     let _ = wrapper.sdl()?;
 
                     let awaitable = Python::attach(|py| {
@@ -1537,7 +1300,7 @@ async def ticks(parent, info, limit: int):
         /// Ensures SchemaWrapper can execute multiple queries concurrently.
         #[test]
         fn schema_wrapper_executes_concurrently() {
-            let (schema, resolvers) = crate::with_py(|py| build_definition_with_args(py));
+            let plan = crate::with_py(|py| build_plan_with_args(py));
             crate::with_py(|py| {
                 let vars_one = PyDict::new(py);
                 vars_one.set_item("name", "Ada").unwrap();
@@ -1556,9 +1319,7 @@ async def ticks(parent, info, limit: int):
                 let context = context.into_any().unbind();
 
                 pyo3_async_runtimes::tokio::run(py, async move {
-                    let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(py, &schema.bind(py), Some(&resolvers.bind(py)), None)
-                    })?;
+                    let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
 
                     let await_one = Python::attach(|py| {
                         wrapper
@@ -1648,31 +1409,33 @@ async def ticks(parent, info, limit: int):
         #[test]
         fn schema_wrapper_requires_root_for_parent_resolution() {
             crate::with_py(|py| {
-                let query_field = PyDict::new(py);
-                query_field.set_item("name", "value").unwrap();
-                query_field.set_item("source", "value").unwrap();
-                query_field.set_item("type", "Int!").unwrap();
+                let locals = PyDict::new(py);
+                py.run(
+                    pyo3::ffi::c_str!(
+                        r#"
+from grommet.plan import SchemaPlan, TypePlan, FieldPlan
+from grommet.metadata import TypeKind, TypeSpec
 
-                let query_def = PyDict::new(py);
-                query_def.set_item("kind", "object").unwrap();
-                query_def.set_item("name", "Query").unwrap();
-                let query_fields = PyList::new(py, [query_field]).unwrap();
-                query_def.set_item("fields", query_fields).unwrap();
-
-                let schema = PyDict::new(py);
-                schema.set_item("query", "Query").unwrap();
-
-                let definition = PyDict::new(py);
-                definition.set_item("schema", schema).unwrap();
-                let types = PyList::new(py, [query_def]).unwrap();
-                definition.set_item("types", types).unwrap();
-
-                let definition = definition.into_any().unbind();
+plan = SchemaPlan(
+    query="Query", mutation=None, subscription=None,
+    types=(
+        TypePlan(kind=TypeKind.OBJECT, name="Query", cls=object, fields=(
+            FieldPlan(name="value", source="value",
+                      type_spec=TypeSpec(kind="named", name="Int")),
+        )),
+    ),
+    scalars=(), enums=(), unions=(),
+)
+"#
+                    ),
+                    None,
+                    Some(&locals),
+                )
+                .unwrap();
+                let plan = locals.get_item("plan").unwrap().unwrap().unbind();
 
                 pyo3_async_runtimes::tokio::run(py, async move {
-                    let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(py, &definition.bind(py), None, None)
-                    })?;
+                    let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
 
                     let awaitable = Python::attach(|py| {
                         wrapper
@@ -1718,22 +1481,15 @@ async def sub_only_anext(parent, info):
                 let sub_only_anext = locals.get_item("sub_only_anext").unwrap().unwrap().unbind();
 
                 pyo3_async_runtimes::tokio::run(py, async move {
-                    let (definition, resolvers) = Python::attach(|py| {
-                        build_subscription_definition(
+                    let plan = Python::attach(|py| {
+                        build_subscription_plan(
                             py,
                             &noop.bind(py),
                             &sub_only_anext.bind(py),
                             "Int!",
                         )
                     });
-                    let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(
-                            py,
-                            &definition.bind(py),
-                            Some(&resolvers.bind(py)),
-                            None,
-                        )
-                    })?;
+                    let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
                     let stream = Python::attach(|py| {
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;
@@ -1789,22 +1545,10 @@ async def sub_not_async(parent, info):
                 let sub_not_async = locals.get_item("sub_not_async").unwrap().unwrap().unbind();
 
                 pyo3_async_runtimes::tokio::run(py, async move {
-                    let (definition, resolvers) = Python::attach(|py| {
-                        build_subscription_definition(
-                            py,
-                            &noop.bind(py),
-                            &sub_not_async.bind(py),
-                            "Int!",
-                        )
+                    let plan = Python::attach(|py| {
+                        build_subscription_plan(py, &noop.bind(py), &sub_not_async.bind(py), "Int!")
                     });
-                    let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(
-                            py,
-                            &definition.bind(py),
-                            Some(&resolvers.bind(py)),
-                            None,
-                        )
-                    })?;
+                    let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
                     let stream = Python::attach(|py| {
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;
@@ -1882,22 +1626,10 @@ async def sub_wrong_type(parent, info):
                 let sub_wrong_type = locals.get_item("sub_wrong_type").unwrap().unwrap().unbind();
 
                 pyo3_async_runtimes::tokio::run(py, async move {
-                    let (definition, resolvers) = Python::attach(|py| {
-                        build_subscription_definition(
-                            py,
-                            &noop.bind(py),
-                            &sub_raise.bind(py),
-                            "Int!",
-                        )
+                    let plan = Python::attach(|py| {
+                        build_subscription_plan(py, &noop.bind(py), &sub_raise.bind(py), "Int!")
                     });
-                    let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(
-                            py,
-                            &definition.bind(py),
-                            Some(&resolvers.bind(py)),
-                            None,
-                        )
-                    })?;
+                    let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
                     let stream = Python::attach(|py| {
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;
@@ -1907,22 +1639,15 @@ async def sub_wrong_type(parent, info):
                     let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
                     let _ = crate::runtime::into_future(next)?.await;
 
-                    let (definition, resolvers) = Python::attach(|py| {
-                        build_subscription_definition(
+                    let plan = Python::attach(|py| {
+                        build_subscription_plan(
                             py,
                             &noop.bind(py),
                             &sub_non_awaitable.bind(py),
                             "Int!",
                         )
                     });
-                    let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(
-                            py,
-                            &definition.bind(py),
-                            Some(&resolvers.bind(py)),
-                            None,
-                        )
-                    })?;
+                    let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
                     let stream = Python::attach(|py| {
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;
@@ -1930,22 +1655,10 @@ async def sub_wrong_type(parent, info):
                     let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| assert_response_has_errors(result.bind(py)));
 
-                    let (definition, resolvers) = Python::attach(|py| {
-                        build_subscription_definition(
-                            py,
-                            &noop.bind(py),
-                            &sub_stop.bind(py),
-                            "Int!",
-                        )
+                    let plan = Python::attach(|py| {
+                        build_subscription_plan(py, &noop.bind(py), &sub_stop.bind(py), "Int!")
                     });
-                    let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(
-                            py,
-                            &definition.bind(py),
-                            Some(&resolvers.bind(py)),
-                            None,
-                        )
-                    })?;
+                    let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
                     let stream = Python::attach(|py| {
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;
@@ -1959,22 +1672,10 @@ async def sub_wrong_type(parent, info):
                         panic!("expected stop async iteration");
                     }
 
-                    let (definition, resolvers) = Python::attach(|py| {
-                        build_subscription_definition(
-                            py,
-                            &noop.bind(py),
-                            &sub_error.bind(py),
-                            "Int!",
-                        )
+                    let plan = Python::attach(|py| {
+                        build_subscription_plan(py, &noop.bind(py), &sub_error.bind(py), "Int!")
                     });
-                    let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(
-                            py,
-                            &definition.bind(py),
-                            Some(&resolvers.bind(py)),
-                            None,
-                        )
-                    })?;
+                    let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
                     let stream = Python::attach(|py| {
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;
@@ -1982,22 +1683,15 @@ async def sub_wrong_type(parent, info):
                     let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| assert_response_has_errors(result.bind(py)));
 
-                    let (definition, resolvers) = Python::attach(|py| {
-                        build_subscription_definition(
+                    let plan = Python::attach(|py| {
+                        build_subscription_plan(
                             py,
                             &noop.bind(py),
                             &sub_wrong_type.bind(py),
                             "[Int]",
                         )
                     });
-                    let wrapper = Python::attach(|py| {
-                        SchemaWrapper::new(
-                            py,
-                            &definition.bind(py),
-                            Some(&resolvers.bind(py)),
-                            None,
-                        )
-                    })?;
+                    let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
                     let stream = Python::attach(|py| {
                         wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
                     })?;

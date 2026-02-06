@@ -23,6 +23,7 @@ from .metadata import (
     FieldMeta,
     GrommetMetaType,
     ScalarMeta,
+    TypeKind,
     TypeMeta,
     UnionMeta,
     _register_enum,
@@ -160,6 +161,55 @@ def _apply_field_resolvers(target: pytype) -> tuple[pytype, bool]:
     return target, True
 
 
+def _rebuild_dataclass(target: pytype) -> pytype:
+    """Re-apply dataclasses.dataclass preserving existing params."""
+    params = target.__dataclass_params__  # type: ignore[attr-defined]
+    return dataclasses.dataclass(
+        target,
+        init=params.init,
+        repr=params.repr,
+        eq=params.eq,
+        order=params.order,
+        unsafe_hash=params.unsafe_hash,
+        frozen=params.frozen,
+        match_args=params.match_args,
+        kw_only=params.kw_only,
+        slots=params.slots,
+        weakref_slot=params.weakref_slot,
+    )
+
+
+def _wrap_type_decorator(
+    target: pytype,
+    *,
+    kind: TypeKind,
+    name: str | None,
+    description: str | None,
+    implements: "tuple[pytype, ...]",
+    allow_resolvers: bool,
+) -> pytype:
+    """Shared implementation for @type, @interface, and @input decorators."""
+    if not allow_resolvers and any(
+        isinstance(value, _FieldResolver) for value in vars(target).values()
+    ):
+        raise input_field_resolver_not_allowed()
+    if not dataclasses.is_dataclass(target):
+        raise dataclass_required(f"@grommet.{kind.value}")
+    if allow_resolvers:
+        target, applied = _apply_field_resolvers(target)
+        if applied:
+            target = _rebuild_dataclass(target)
+    meta = TypeMeta(
+        kind=kind,
+        name=name or target.__name__,
+        description=description,
+        implements=implements,
+    )
+    _set_grommet_attr(target, "__grommet_meta__", meta)
+    _register_type(target, meta)
+    return target
+
+
 @overload
 def type(
     cls: pytype,
@@ -190,33 +240,14 @@ def type(
     """Marks a dataclass as a GraphQL object type."""
 
     def wrap(target: pytype) -> pytype:
-        if not dataclasses.is_dataclass(target):
-            raise dataclass_required("@grommet.type")
-        target, applied = _apply_field_resolvers(target)
-        if applied:
-            params = target.__dataclass_params__  # type: ignore[attr-defined]
-            target = dataclasses.dataclass(
-                target,
-                init=params.init,
-                repr=params.repr,
-                eq=params.eq,
-                order=params.order,
-                unsafe_hash=params.unsafe_hash,
-                frozen=params.frozen,
-                match_args=params.match_args,
-                kw_only=params.kw_only,
-                slots=params.slots,
-                weakref_slot=params.weakref_slot,
-            )
-        meta = TypeMeta(
-            kind="object",
-            name=name or target.__name__,
+        return _wrap_type_decorator(
+            target,
+            kind=TypeKind.OBJECT,
+            name=name,
             description=description,
             implements=tuple(implements or ()),
+            allow_resolvers=True,
         )
-        _set_grommet_attr(target, "__grommet_meta__", meta)
-        _register_type(target, meta)
-        return target
 
     if cls is None:
         return cast("Callable[[pytype], GrommetClass]", wrap)
@@ -244,16 +275,14 @@ def input(
     """Marks a dataclass as a GraphQL input type."""
 
     def wrap(target: pytype) -> pytype:
-        if any(isinstance(value, _FieldResolver) for value in vars(target).values()):
-            raise input_field_resolver_not_allowed()
-        if not dataclasses.is_dataclass(target):
-            raise dataclass_required("@grommet.input")
-        meta = TypeMeta(
-            kind="input", name=name or target.__name__, description=description
+        return _wrap_type_decorator(
+            target,
+            kind=TypeKind.INPUT,
+            name=name,
+            description=description,
+            implements=(),
+            allow_resolvers=False,
         )
-        _set_grommet_attr(target, "__grommet_meta__", meta)
-        _register_type(target, meta)
-        return target
 
     if cls is None:
         return cast("Callable[[pytype], GrommetClass]", wrap)
@@ -290,33 +319,14 @@ def interface(
     """Marks a dataclass as a GraphQL interface type."""
 
     def wrap(target: pytype) -> pytype:
-        if not dataclasses.is_dataclass(target):
-            raise dataclass_required("@grommet.interface")
-        target, applied = _apply_field_resolvers(target)
-        if applied:
-            params = target.__dataclass_params__  # type: ignore[attr-defined]
-            target = dataclasses.dataclass(
-                target,
-                init=params.init,
-                repr=params.repr,
-                eq=params.eq,
-                order=params.order,
-                unsafe_hash=params.unsafe_hash,
-                frozen=params.frozen,
-                match_args=params.match_args,
-                kw_only=params.kw_only,
-                slots=params.slots,
-                weakref_slot=params.weakref_slot,
-            )
-        meta = TypeMeta(
-            kind="interface",
-            name=name or target.__name__,
+        return _wrap_type_decorator(
+            target,
+            kind=TypeKind.INTERFACE,
+            name=name,
             description=description,
             implements=tuple(implements or ()),
+            allow_resolvers=True,
         )
-        _set_grommet_attr(target, "__grommet_meta__", meta)
-        _register_type(target, meta)
-        return target
 
     if cls is None:
         return cast("Callable[[pytype], GrommetClass]", wrap)

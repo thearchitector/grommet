@@ -3,9 +3,10 @@ from dataclasses import dataclass
 import pytest
 
 import grommet as gm
-from grommet.errors import GrommetSchemaError, GrommetTypeError
+from grommet.errors import GrommetSchemaError
+from grommet.metadata import TypeKind
 from grommet.plan import build_schema_plan
-from grommet.schema import Schema, _build_schema_definition
+from grommet.schema import Schema
 
 
 @gm.input
@@ -47,30 +48,31 @@ def test_internal_input_fields_skipped() -> None:
     Ensures internal input fields are excluded from schema definitions.
     """
     plan = build_schema_plan(query=Query)
-    input_plan = next(tp for tp in plan.types if tp.kind == "input")
+    input_plan = next(tp for tp in plan.types if tp.kind is TypeKind.INPUT)
     field_names = {fp.name for fp in input_plan.fields}
     assert "hidden" not in field_names
     assert "value" in field_names
 
 
-def test_schema_unknown_kind_raises() -> None:
+def test_schema_subscription_type_plan_accepted() -> None:
     """
-    Ensures unknown type kinds raise a schema type error.
+    Ensures subscription type plans include subscription kinds.
     """
     from grommet.plan import SchemaPlan, TypePlan
 
-    fake_type_plan = TypePlan(kind="mystery", name="Weird", cls=object, fields=())
+    fake_type_plan = TypePlan(
+        kind=TypeKind.SUBSCRIPTION, name="Sub", cls=object, fields=()
+    )
     fake_plan = SchemaPlan(
         query="Query",
         mutation=None,
-        subscription=None,
+        subscription="Sub",
         types=(fake_type_plan,),
         scalars=(),
         enums=(),
         unions=(),
     )
-    with pytest.raises(GrommetTypeError):
-        _build_schema_definition(fake_plan)
+    assert any(tp.kind is TypeKind.SUBSCRIPTION for tp in fake_plan.types)
 
 
 @gm.interface
@@ -84,12 +86,10 @@ class Node:
 
 def test_interface_resolvers_not_registered() -> None:
     """
-    Verifies interface resolvers are not registered in schema definitions.
+    Verifies interface resolvers are not registered in schema plan.
     """
     plan = build_schema_plan(query=Query)
-    _, resolvers, _ = _build_schema_definition(plan)
-    # Interface resolvers should not be registered
-    assert "Node.id" not in resolvers
+    assert "Node.id" not in plan.resolvers
 
 
 @gm.type

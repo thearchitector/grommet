@@ -1,34 +1,25 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use pyo3::prelude::*;
 
-// shared rust wrappers for python-owned values; Arc<Mutex<_>> keeps Send+Sync without unsafe
 #[derive(Clone)]
 pub(crate) struct PyObj {
-    inner: Arc<Mutex<Py<PyAny>>>,
+    inner: Arc<Py<PyAny>>,
 }
 
 impl PyObj {
     pub(crate) fn new(inner: Py<PyAny>) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(inner)),
+            inner: Arc::new(inner),
         }
     }
 
     pub(crate) fn bind<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny> {
-        let guard = self
-            .inner
-            .lock()
-            .expect("PyObj mutex poisoned while binding");
-        guard.clone_ref(py).into_bound(py)
+        self.inner.clone_ref(py).into_bound(py)
     }
 
     pub(crate) fn clone_ref(&self, py: Python<'_>) -> Py<PyAny> {
-        let guard = self
-            .inner
-            .lock()
-            .expect("PyObj mutex poisoned while cloning");
-        guard.clone_ref(py)
+        self.inner.clone_ref(py)
     }
 }
 
@@ -64,14 +55,14 @@ pub(crate) struct UnionDef {
 
 pub(crate) struct ArgDef {
     pub(crate) name: String,
-    pub(crate) type_name: String,
+    pub(crate) type_ref: TypeRef,
     pub(crate) default_value: Option<PyObj>,
 }
 
 pub(crate) struct FieldDef {
     pub(crate) name: String,
     pub(crate) source: String,
-    pub(crate) type_name: String,
+    pub(crate) type_ref: TypeRef,
     pub(crate) args: Vec<ArgDef>,
     pub(crate) resolver: Option<String>,
     pub(crate) description: Option<String>,
@@ -79,8 +70,30 @@ pub(crate) struct FieldDef {
     pub(crate) default_value: Option<PyObj>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TypeKind {
+    Object,
+    Interface,
+    Subscription,
+    Input,
+}
+
+impl TypeKind {
+    pub(crate) fn from_str(s: &str) -> PyResult<Self> {
+        match s {
+            "object" => Ok(TypeKind::Object),
+            "interface" => Ok(TypeKind::Interface),
+            "subscription" => Ok(TypeKind::Subscription),
+            "input" => Ok(TypeKind::Input),
+            _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Unknown type kind: {s}"
+            ))),
+        }
+    }
+}
+
 pub(crate) struct TypeDef {
-    pub(crate) kind: String,
+    pub(crate) kind: TypeKind,
     pub(crate) name: String,
     pub(crate) fields: Vec<FieldDef>,
     pub(crate) description: Option<String>,

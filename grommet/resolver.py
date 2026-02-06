@@ -3,6 +3,7 @@ import inspect
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
+from .annotations import _get_type_hints, _type_spec_from_annotation
 from .coercion import _arg_coercer, _default_value_for_annotation
 from .errors import (
     resolver_missing_annotation,
@@ -10,12 +11,12 @@ from .errors import (
     subscription_requires_async_iterator,
 )
 from .info import Info
-from .typespec import _type_spec_from_annotation
-from .typing_utils import _get_type_hints
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Any
+
+    from .metadata import TypeKind
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -28,7 +29,7 @@ class ResolverSpec:
     is_asyncgen: bool
 
 
-_RESOLVER_CACHE: dict[tuple["Callable[..., Any]", str], ResolverSpec] = {}
+_RESOLVER_CACHE: dict[tuple["Callable[..., Any]", "TypeKind"], ResolverSpec] = {}
 
 
 _RESERVED_PARAM_NAMES = {"parent", "root", "self", "info", "context"}
@@ -119,7 +120,7 @@ def _is_async_iterator(value: "Any") -> bool:
 
 
 def _wrap_resolver(
-    resolver: "Callable[..., Any]", *, kind: str, field_name: str
+    resolver: "Callable[..., Any]", *, kind: "TypeKind", field_name: str
 ) -> "tuple[Callable[..., Any], list[dict[str, Any]]]":
     """Wrap a resolver with coercion and return (wrapper, arg_defs)."""
     cache_key = (resolver, kind)
@@ -133,11 +134,13 @@ def _wrap_resolver(
 
 
 def _build_resolver_spec(
-    resolver: "Callable[..., Any]", *, kind: str, field_name: str
+    resolver: "Callable[..., Any]", *, kind: "TypeKind", field_name: str
 ) -> ResolverSpec:
     """Build a ResolverSpec with precomputed metadata."""
+    from .metadata import TypeKind as _TypeKind
+
     resolver_name = _resolver_name(resolver)
-    is_subscription = kind == "subscription"
+    is_subscription = kind is _TypeKind.SUBSCRIPTION
     is_asyncgen = _is_asyncgen_callable(resolver)
     is_coroutine = _is_coroutine_callable(resolver)
     if is_subscription:

@@ -1,21 +1,17 @@
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_graphql::dynamic::{
     Enum, Field, FieldFuture, InputObject, InputValue, Interface, InterfaceField, Object, Scalar,
-    Schema, Subscription, SubscriptionField, SubscriptionFieldFuture, TypeRef,
+    Schema, Subscription, SubscriptionField, SubscriptionFieldFuture,
 };
 use pyo3::prelude::*;
 
-thread_local! {
-    static TYPE_REF_CACHE: RefCell<HashMap<String, TypeRef>> = RefCell::new(HashMap::new());
-}
-
-use crate::errors::{py_value_error, unknown_type_kind};
+use crate::errors::py_value_error;
 use crate::resolver::{resolve_field, resolve_subscription_stream};
 use crate::types::{
-    EnumDef, FieldContext, FieldDef, PyObj, ScalarBinding, ScalarDef, SchemaDef, TypeDef, UnionDef,
+    ArgDef, EnumDef, FieldContext, FieldDef, PyObj, ScalarBinding, ScalarDef, SchemaDef, TypeDef,
+    TypeKind, UnionDef,
 };
 use crate::values::pyobj_to_value;
 
@@ -37,7 +33,7 @@ pub(crate) fn build_schema(
 
     let mut abstract_types = HashSet::new();
     for type_def in &type_defs {
-        if type_def.kind == "interface" {
+        if type_def.kind == TypeKind::Interface {
             abstract_types.insert(type_def.name.clone());
         }
     }
@@ -80,8 +76,8 @@ pub(crate) fn build_schema(
     }
 
     for type_def in type_defs {
-        match type_def.kind.as_str() {
-            "object" => {
+        match type_def.kind {
+            TypeKind::Object => {
                 let mut object = Object::new(type_def.name.as_str());
                 if let Some(desc) = type_def.description.as_ref() {
                     object = object.description(desc.as_str());
@@ -100,7 +96,7 @@ pub(crate) fn build_schema(
                 }
                 builder = builder.register(object);
             }
-            "interface" => {
+            TypeKind::Interface => {
                 let mut interface = Interface::new(type_def.name.as_str());
                 if let Some(desc) = type_def.description.as_ref() {
                     interface = interface.description(desc.as_str());
@@ -114,7 +110,7 @@ pub(crate) fn build_schema(
                 }
                 builder = builder.register(interface);
             }
-            "subscription" => {
+            TypeKind::Subscription => {
                 let mut subscription = Subscription::new(type_def.name.as_str());
                 if let Some(desc) = type_def.description.as_ref() {
                     subscription = subscription.description(desc.as_str());
@@ -130,7 +126,7 @@ pub(crate) fn build_schema(
                 }
                 builder = builder.register(subscription);
             }
-            "input" => {
+            TypeKind::Input => {
                 let mut input = InputObject::new(type_def.name.as_str());
                 if let Some(desc) = type_def.description.as_ref() {
                     input = input.description(desc.as_str());
@@ -139,9 +135,6 @@ pub(crate) fn build_schema(
                     input = input.field(build_input_field(field_def, scalar_bindings.clone())?);
                 }
                 builder = builder.register(input);
-            }
-            _ => {
-                return Err(unknown_type_kind(type_def.kind.as_str()));
             }
         }
     }
@@ -162,17 +155,44 @@ fn build_field_context(
         .as_ref()
         .and_then(|key| resolver_map.get(key).cloned());
     let arg_names: Vec<String> = field_def.args.iter().map(|arg| arg.name.clone()).collect();
-    let type_ref = parse_type_ref(field_def.type_name.as_str());
-
     Arc::new(FieldContext {
         resolver,
         arg_names,
         field_name: field_def.name.clone(),
         source_name: field_def.source.clone(),
-        output_type: type_ref,
+        output_type: field_def.type_ref.clone(),
         scalar_bindings,
         abstract_types,
     })
+}
+
+macro_rules! apply_metadata {
+    ($field:expr, $def:expr) => {{
+        let mut f = $field;
+        if let Some(desc) = $def.description.as_ref() {
+            f = f.description(desc.as_str());
+        }
+        if let Some(dep) = $def.deprecation.as_ref() {
+            f = f.deprecation(Some(dep.as_str()));
+        }
+        f
+    }};
+}
+
+fn build_input_values(
+    args: Vec<ArgDef>,
+    scalar_bindings: &[ScalarBinding],
+) -> PyResult<Vec<InputValue>> {
+    let mut input_values = Vec::with_capacity(args.len());
+    for arg_def in args {
+        let mut input_value = InputValue::new(arg_def.name, arg_def.type_ref);
+        if let Some(default_value) = arg_def.default_value.as_ref() {
+            input_value =
+                input_value.default_value(pyobj_to_value(default_value, scalar_bindings)?);
+        }
+        input_values.push(input_value);
+    }
+    Ok(input_values)
 }
 
 fn build_field(
@@ -193,47 +213,21 @@ fn build_field(
         let field_ctx = field_ctx.clone();
         FieldFuture::new(async move { resolve_field(ctx, field_ctx).await })
     });
-
-    for arg_def in field_def.args {
-        let arg_ref = parse_type_ref(arg_def.type_name.as_str());
-        let mut input_value = InputValue::new(arg_def.name, arg_ref);
-        if let Some(default_value) = arg_def.default_value.as_ref() {
-            input_value =
-                input_value.default_value(pyobj_to_value(default_value, scalar_bindings.as_ref())?);
-        }
-        field = field.argument(input_value);
+    for iv in build_input_values(field_def.args, scalar_bindings.as_ref())? {
+        field = field.argument(iv);
     }
-    if let Some(desc) = field_def.description.as_ref() {
-        field = field.description(desc.as_str());
-    }
-    if let Some(dep) = field_def.deprecation.as_ref() {
-        field = field.deprecation(Some(dep.as_str()));
-    }
-    Ok(field)
+    Ok(apply_metadata!(field, field_def))
 }
 
 fn build_interface_field(
     field_def: FieldDef,
     scalar_bindings: Arc<Vec<ScalarBinding>>,
 ) -> PyResult<InterfaceField> {
-    let type_ref = parse_type_ref(field_def.type_name.as_str());
-    let mut field = InterfaceField::new(field_def.name, type_ref);
-    for arg_def in field_def.args {
-        let arg_ref = parse_type_ref(arg_def.type_name.as_str());
-        let mut input_value = InputValue::new(arg_def.name, arg_ref);
-        if let Some(default_value) = arg_def.default_value.as_ref() {
-            input_value =
-                input_value.default_value(pyobj_to_value(default_value, scalar_bindings.as_ref())?);
-        }
-        field = field.argument(input_value);
+    let mut field = InterfaceField::new(field_def.name, field_def.type_ref);
+    for iv in build_input_values(field_def.args, scalar_bindings.as_ref())? {
+        field = field.argument(iv);
     }
-    if let Some(desc) = field_def.description.as_ref() {
-        field = field.description(desc.as_str());
-    }
-    if let Some(dep) = field_def.deprecation.as_ref() {
-        field = field.deprecation(Some(dep.as_str()));
-    }
-    Ok(field)
+    Ok(apply_metadata!(field, field_def))
 }
 
 fn build_subscription_field(
@@ -256,69 +250,20 @@ fn build_subscription_field(
             async move { resolve_subscription_stream(ctx, field_ctx).await },
         )
     });
-
-    for arg_def in field_def.args {
-        let arg_ref = parse_type_ref(arg_def.type_name.as_str());
-        let mut input_value = InputValue::new(arg_def.name, arg_ref);
-        if let Some(default_value) = arg_def.default_value.as_ref() {
-            let value = pyobj_to_value(default_value, scalar_bindings.as_ref())?;
-            input_value = input_value.default_value(value);
-        }
-        field = field.argument(input_value);
+    for iv in build_input_values(field_def.args, scalar_bindings.as_ref())? {
+        field = field.argument(iv);
     }
-    if let Some(desc) = field_def.description.as_ref() {
-        field = field.description(desc.as_str());
-    }
-    if let Some(dep) = field_def.deprecation.as_ref() {
-        field = field.deprecation(Some(dep.as_str()));
-    }
-    Ok(field)
+    Ok(apply_metadata!(field, field_def))
 }
 
 fn build_input_field(
     field_def: FieldDef,
     scalar_bindings: Arc<Vec<ScalarBinding>>,
 ) -> PyResult<InputValue> {
-    let arg_ref = parse_type_ref(field_def.type_name.as_str());
-    let mut input_value = InputValue::new(field_def.name, arg_ref);
+    let mut input_value = InputValue::new(field_def.name, field_def.type_ref);
     if let Some(default_value) = field_def.default_value.as_ref() {
         input_value =
             input_value.default_value(pyobj_to_value(default_value, scalar_bindings.as_ref())?);
     }
     Ok(input_value)
-}
-
-fn parse_type_ref(type_name: &str) -> TypeRef {
-    TYPE_REF_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if let Some(cached) = cache.get(type_name) {
-            return cached.clone();
-        }
-        let parsed = parse_type_ref_uncached(type_name);
-        cache.insert(type_name.to_string(), parsed.clone());
-        parsed
-    })
-}
-
-fn parse_type_ref_uncached(type_name: &str) -> TypeRef {
-    let mut name = type_name.trim();
-    let mut non_null = false;
-    if name.ends_with('!') {
-        non_null = true;
-        name = &name[..name.len() - 1];
-    }
-    let ty = if name.starts_with('[') && name.ends_with(']') {
-        let inner = &name[1..name.len() - 1];
-        // Use uncached recursive call to avoid RefCell re-borrow
-        let inner_ref = parse_type_ref_uncached(inner);
-        TypeRef::List(Box::new(inner_ref))
-    } else {
-        TypeRef::named(name)
-    };
-
-    if non_null {
-        TypeRef::NonNull(Box::new(ty))
-    } else {
-        ty
-    }
 }

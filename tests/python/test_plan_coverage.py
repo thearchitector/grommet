@@ -5,7 +5,6 @@ from enum import Enum
 
 import grommet as gm
 from grommet.plan import build_schema_plan
-from grommet.registry import _traverse_schema
 
 
 @gm.scalar(serialize=str, parse_value=str)
@@ -98,12 +97,23 @@ def test_plan_discovers_scalars_enums_unions_via_annotations() -> None:
 
 
 def test_plan_discovers_interface_implementers() -> None:
-    """Test that interface and implementers are discovered via _traverse_schema."""
-    result = _traverse_schema([Node, ConcreteNode])
+    """Test that interface and its implementers are discovered via build_schema_plan."""
 
-    type_names = {meta.name for meta in result.types.values()}
+    @gm.type(implements=[Node])
+    @dataclass
+    class ImplNode:
+        id: int
+        label: str
+
+    @gm.type
+    @dataclass
+    class QueryWithNode:
+        node: Node
+
+    plan = build_schema_plan(query=QueryWithNode)
+    type_names = {t.name for t in plan.types}
     assert "Node" in type_names
-    assert "ConcreteNode" in type_names
+    assert "ImplNode" in type_names
 
 
 def test_plan_handles_union_as_entrypoint() -> None:

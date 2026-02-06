@@ -1,4 +1,4 @@
-from grommet.typing_utils import _get_type_hints
+from grommet.annotations import _get_type_hints
 
 
 class Example:

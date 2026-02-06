@@ -5,8 +5,7 @@ from typing import List
 import pytest
 
 import grommet as gm
-from grommet.errors import GrommetTypeError
-from grommet.typespec import (
+from grommet.annotations import (
     _get_enum_meta,
     _get_scalar_meta,
     _get_type_meta,
@@ -14,6 +13,7 @@ from grommet.typespec import (
     _maybe_type_name,
     _type_spec_from_annotation,
 )
+from grommet.errors import GrommetTypeError
 
 
 @gm.scalar(serialize=lambda value: value, parse_value=lambda value: value)
