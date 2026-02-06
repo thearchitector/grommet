@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "High performance type-driven Python GraphQL library backed by Rust"
 classifiers = [
     # "Development Process :: AI Assisted",
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Natural Language :: English",
     "Programming Language :: Python :: 3.13",

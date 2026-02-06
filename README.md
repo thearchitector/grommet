@@ -64,12 +64,12 @@ print(result)  # {'data': {'hello': 'Hello, grommet!'}}
 Reference the resolution parent and info in resolvers through the `parent` and `info` arguments:
 
 ```python
-@grommet.type
+@c.type
 @dataclass
 class Query:
     @grommet.field
     @staticmethod
-    async def hello(parent: "Query", info: gm.Info) -> str:
+    async def hello(parent: "Query", info: grommet.Info) -> str:
         return f"Hello, {name}!"
 ```
 
@@ -92,7 +92,7 @@ class User:
 
     @grommet.field
     @staticmethod
-    async def full_name(parent: "User", info: gm.Info) -> str:
+    async def full_name(parent: "User", info: grommet.Info) -> str:
         return f"{parent.title} {parent.name}" if parent.title else parent.name
 
 @grommet.type
