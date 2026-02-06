@@ -7,6 +7,8 @@ High performance async Python GraphQL server library inspired by [Strawberry](ht
 
 This is an experiment in a nearly 100% AI-written project. I provide guidelines and design guidance through review of the generated code and curated revision plans, but AI does the heavy lifting. Features are developed as my token and usage counts reset.
 
+The goal is to utilize AI to prove the concept, but do so while also laying solid technical foundations for future human-driven development and maintenance; my personal belief is that the latter is always necessary.
+
 ## Quick Start
 
 ### Installation
