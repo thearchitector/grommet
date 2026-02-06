@@ -204,3 +204,43 @@ def test_wrap_resolver_subscription_coroutine_path() -> None:
         subscription_coro, kind=TypeKind.SUBSCRIPTION, field_name="events"
     )
     assert arg_defs == []
+
+
+@pytest.mark.anyio
+async def test_wrap_resolver_subscription_coroutine_returns_iterator() -> None:
+    """Verifies subscription coroutine wrapper awaits and returns the iterator."""
+
+    async def subscription_coro(parent: None) -> AsyncIterator[int]:
+        async def gen() -> AsyncIterator[int]:
+            yield 42
+
+        return gen()
+
+    wrapper, _ = _wrap_resolver(
+        subscription_coro, kind=TypeKind.SUBSCRIPTION, field_name="events"
+    )
+    result = await wrapper(None, {"field_name": "events"})
+    assert hasattr(result, "__anext__")
+
+
+def test_wrap_resolver_sync_subscription_rejected() -> None:
+    """Ensures sync functions are rejected as subscription resolvers."""
+
+    def sync_sub(parent: None) -> int:  # type: ignore[return]
+        return 1
+
+    with pytest.raises(GrommetTypeError):
+        _wrap_resolver(sync_sub, kind=TypeKind.SUBSCRIPTION, field_name="ticks")
+
+
+def test_resolver_name_func_attr_no_name() -> None:
+    """Verifies _resolver_name falls back to type name when func has no __name__."""
+
+    class Wrapper:
+        func = object()  # has .func but func has no __name__
+
+        def __call__(self) -> None:
+            pass
+
+    name = _resolver_name(Wrapper())
+    assert name == "Wrapper"
