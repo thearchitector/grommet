@@ -45,7 +45,7 @@ async def main() -> None:
     elapsed = time.perf_counter() - start
     res = result["data"]
     size = len(res["rows"])
-    print(f"Fetched {size} rows in {elapsed:.4f}s")
+    print(f"Fetched {size * 5} cells ({size}x5) in {elapsed:.4f}s")
 
 
 if __name__ == "__main__":

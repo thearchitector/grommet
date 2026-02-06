@@ -17,6 +17,6 @@ path = "tests/test_core.rs"
 [dependencies]
 async-graphql = "7.2.1"
 indexmap = "2"
-pyo3 = { version = "0.28.0", features = ["abi3-py313"] }
+pyo3 = "0.28.0"
 pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime", "unstable-streams"] }
 tokio = { version = "1.49", features = ["rt-multi-thread", "sync", "macros"] }
