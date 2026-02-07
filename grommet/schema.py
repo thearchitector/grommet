@@ -54,12 +54,6 @@ if TYPE_CHECKING:
 
         async def aclose(self) -> None: ...
 
-    class Context[T](Protocol):
-        state: T
-
-        def field(self, name: str) -> "Any": ...
-        def look_ahead(self) -> "Any": ...
-
 
 class Schema:
     __slots__ = ("_core",)
