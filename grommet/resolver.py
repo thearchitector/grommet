@@ -1,16 +1,16 @@
 import dataclasses
 import inspect
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_origin
 
 from .annotations import _get_type_hints, _type_spec_from_annotation
 from .coercion import _arg_coercer, _default_value_for_annotation
+from .context import Context
 from .errors import (
     resolver_missing_annotation,
     resolver_requires_async,
     subscription_requires_async_iterator,
 )
-from .info import Info
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -32,9 +32,6 @@ class ResolverSpec:
 _RESOLVER_CACHE: dict[tuple["Callable[..., Any]", "TypeKind"], ResolverSpec] = {}
 
 
-_RESERVED_PARAM_NAMES = {"parent", "root", "self", "info", "context"}
-
-
 @lru_cache(maxsize=512)
 def _resolver_signature(resolver: "Callable[..., Any]") -> inspect.Signature:
     return inspect.signature(resolver)
@@ -53,34 +50,21 @@ def _resolver_params(resolver: "Callable[..., Any]") -> list[inspect.Parameter]:
     ]
 
 
+def _is_context_annotation(annotation: "Any") -> bool:
+    return annotation is Context or get_origin(annotation) is Context
+
+
 def _resolver_arg_params(resolver: "Callable[..., Any]") -> list[inspect.Parameter]:
-    return [
-        p for p in _resolver_params(resolver) if p.name not in _RESERVED_PARAM_NAMES
-    ]
-
-
-def _find_param(
-    params: list[inspect.Parameter], names: set[str]
-) -> inspect.Parameter | None:
-    for param in params:
-        if param.name in names:
-            return param
-    return None
-
-
-def _normalize_info(info: "Any") -> Info:
-    if isinstance(info, Info):
-        return info
-    if isinstance(info, dict):
-        return Info(
-            field_name=str(info.get("field_name", "")),
-            context=info.get("context"),
-            root=info.get("root"),
-        )
-    field_name = getattr(info, "field_name", "")
-    context = getattr(info, "context", None)
-    root = getattr(info, "root", None)
-    return Info(field_name=str(field_name), context=context, root=root)
+    """Return only the GraphQL argument parameters (excluding self and context)."""
+    params = _resolver_params(resolver)
+    hints = _get_type_hints(resolver)
+    # params[0] is always self
+    start = 1
+    if len(params) >= 2:
+        ann = hints.get(params[1].name, params[1].annotation)
+        if ann is not inspect._empty and _is_context_annotation(ann):
+            start = 2
+    return params[start:]
 
 
 def _resolver_arg_annotations(resolver: "Callable[..., Any]") -> dict[str, "Any"]:
@@ -151,11 +135,18 @@ def _build_resolver_spec(
 
     hints = _get_type_hints(resolver)
     params = _resolver_params(resolver)
-    parent_param = _find_param(params, {"parent", "self"})
-    root_param = _find_param(params, {"root"})
-    info_param = _find_param(params, {"info"})
-    context_param = _find_param(params, {"context"})
-    arg_params = [p for p in params if p.name not in _RESERVED_PARAM_NAMES]
+
+    # params[0] is always self (the parent instance)
+    # params[1] may be a Context[T] param — detected by type annotation
+    context_param: inspect.Parameter | None = None
+    if len(params) >= 2:
+        ann = hints.get(params[1].name, params[1].annotation)
+        if ann is not inspect._empty and _is_context_annotation(ann):
+            context_param = params[1]
+
+    # GraphQL args start after self and optional context
+    arg_start = 2 if context_param is not None else 1
+    arg_params = params[arg_start:]
 
     arg_defs: list[dict[str, "Any"]] = []
     arg_coercers: list[tuple[str, "Callable[[Any], Any] | None"]] = []
@@ -175,23 +166,11 @@ def _build_resolver_spec(
         arg_defs.append(arg_def)
         arg_coercers.append((param.name, _arg_coercer(annotation)))
 
-    async def wrapper(parent: "Any", info: "Any", **kwargs: "Any") -> "Any":
+    async def wrapper(parent: "Any", context_obj: "Any", **kwargs: "Any") -> "Any":
         call_kwargs: dict[str, "Any"] = {}
-        info_obj = None
-        if (
-            info_param is not None
-            or context_param is not None
-            or root_param is not None
-        ):
-            info_obj = _normalize_info(info)
-        if parent_param is not None:
-            call_kwargs[parent_param.name] = parent
-        if info_param is not None:
-            call_kwargs[info_param.name] = info_obj or _normalize_info(info)
+        call_kwargs["self"] = parent
         if context_param is not None:
-            call_kwargs[context_param.name] = info_obj.context if info_obj else None
-        if root_param is not None:
-            call_kwargs[root_param.name] = info_obj.root if info_obj else None
+            call_kwargs[context_param.name] = context_obj
         for name, coercer in arg_coercers:
             if name in kwargs:
                 value = kwargs[name]

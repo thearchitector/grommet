@@ -158,7 +158,6 @@ fn build_field_context(
     Arc::new(FieldContext {
         resolver,
         arg_names,
-        field_name: field_def.name.clone(),
         source_name: field_def.source.clone(),
         output_type: field_def.type_ref.clone(),
         scalar_bindings,

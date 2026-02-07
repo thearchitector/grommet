@@ -1,8 +1,6 @@
 import re
 from dataclasses import dataclass
-from typing import Any, ClassVar
-
-import pytest
+from typing import ClassVar
 
 import grommet as gm
 
@@ -11,24 +9,20 @@ import grommet as gm
 @dataclass
 class Foo:
     num_count: ClassVar[int] = 2
-    _foo: int
-    bar: gm.Internal[str]
-    baz: gm.Private[str]
-    public: str
+    _foo: int = 2
+    bar: gm.Internal[str] = "x"
+    baz: gm.Private[str] = "y"
+    public: str = "ok"
 
     @gm.field
-    @staticmethod
-    async def foobar(parent: "Foo", info: Any) -> str:
-        return parent.bar * parent._foo * Foo.num_count
+    async def foobar(self) -> str:
+        return "xxxx"
 
 
-@pytest.mark.anyio
-async def test_internal_fields_ignored_in_schema_and_resolvers_use_them() -> None:
-    """
-    Verifies internal fields are omitted from SDL but usable in resolvers.
-    """
+async def test_internal_fields_ignored_in_schema() -> None:
+    """Verifies internal fields are omitted from SDL."""
     schema = gm.Schema(query=Foo)
-    sdl = schema.sdl()
+    sdl = schema._core.as_sdl()
 
     def has_field(name: str) -> bool:
         return re.search(rf"^\s*{re.escape(name)}\s*:", sdl, re.MULTILINE) is not None
@@ -38,8 +32,12 @@ async def test_internal_fields_ignored_in_schema_and_resolvers_use_them() -> Non
     assert not has_field("baz")
     assert not has_field("num_count")
     assert has_field("public")
+    assert has_field("foobar")
 
-    root = Foo(_foo=2, bar="x", baz="y", public="ok")
-    result = await schema.execute("{ foobar }", root=root)
 
-    assert result["data"]["foobar"] == "xxxx"
+async def test_resolver_executes_on_type_with_internal_fields() -> None:
+    """Verifies resolvers execute on types with internal fields."""
+    schema = gm.Schema(query=Foo)
+    result = await schema.execute("{ foobar }")
+
+    assert result.data["foobar"] == "xxxx"

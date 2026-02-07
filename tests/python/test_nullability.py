@@ -19,7 +19,7 @@ def test_nullability_sdl_shapes() -> None:
     Verifies SDL nullability matches list and optional field annotations.
     """
     schema = gm.Schema(query=Query)
-    sdl = schema.sdl()
+    sdl = schema._core.as_sdl()
 
     assert "names: [String!]!" in sdl
     assert "maybe_names: [String!]" in sdl

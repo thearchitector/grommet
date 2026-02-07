@@ -1,22 +1,19 @@
 from dataclasses import dataclass
 
-import pytest
-
 import grommet as gm
 
 
 @gm.type(name="Query")
 @dataclass
 class RootQuery:
-    value: str
+    @gm.field
+    async def value(self) -> str:
+        return "ok"
 
 
-@pytest.mark.anyio
-async def test_field_without_resolver_uses_root_value() -> None:
-    """
-    Verifies fields without resolvers read values from the root object.
-    """
+async def test_field_resolver_returns_value() -> None:
+    """Verifies field resolvers return values in responses."""
     schema = gm.Schema(query=RootQuery)
-    result = await schema.execute("{ value }", root={"value": "ok"})
+    result = await schema.execute("{ value }")
 
-    assert result["data"]["value"] == "ok"
+    assert result.data["value"] == "ok"

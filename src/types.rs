@@ -24,10 +24,7 @@ impl PyObj {
 }
 
 #[derive(Clone)]
-pub(crate) struct RootValue(pub(crate) PyObj);
-
-#[derive(Clone)]
-pub(crate) struct ContextValue(pub(crate) PyObj);
+pub(crate) struct StateValue(pub(crate) PyObj);
 
 pub(crate) struct SchemaDef {
     pub(crate) query: String,
@@ -115,7 +112,6 @@ use async_graphql::dynamic::TypeRef;
 pub(crate) struct FieldContext {
     pub(crate) resolver: Option<PyObj>,
     pub(crate) arg_names: Vec<String>,
-    pub(crate) field_name: String,
     pub(crate) source_name: String,
     pub(crate) output_type: TypeRef,
     pub(crate) scalar_bindings: Arc<Vec<ScalarBinding>>,

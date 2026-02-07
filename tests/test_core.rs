@@ -537,10 +537,10 @@ Input.__grommet_meta__ = Meta("input", "Input")
                 response.errors.push(error_empty);
 
                 let result = response_to_py(py, response).unwrap();
-                let dict = result.bind(py).cast::<PyDict>().unwrap();
-                assert!(dict.get_item("data").unwrap().is_some());
-                assert!(dict.get_item("extensions").unwrap().is_some());
-                let errors = dict.get_item("errors").unwrap().unwrap();
+                let bound = result.bind(py);
+                assert!(!bound.getattr("data").unwrap().is_none());
+                assert!(!bound.getattr("extensions").unwrap().is_none());
+                let errors = bound.getattr("errors").unwrap();
                 assert_eq!(errors.cast::<PyList>().unwrap().len(), 2);
             });
         }
@@ -652,6 +652,10 @@ Input.__grommet_meta__ = Meta("input", "Input")
             });
         }
     }
+}
+
+mod lookahead {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lookahead.rs"));
 }
 
 mod resolver {
@@ -790,7 +794,7 @@ mod parse {
 from grommet.plan import SchemaPlan, TypePlan, FieldPlan, ArgPlan
 from grommet.metadata import TypeKind, TypeSpec
 
-async def resolver(parent, info):
+async def resolver(parent, ctx):
     return 1
 
 plan = SchemaPlan(
@@ -841,7 +845,7 @@ import enum
 from grommet.plan import SchemaPlan, TypePlan, FieldPlan, ArgPlan, ScalarPlan, EnumPlan, UnionPlan
 from grommet.metadata import TypeKind, TypeSpec, ScalarMeta, EnumMeta, UnionMeta
 
-async def resolver(parent, info):
+async def resolver(parent, ctx):
     return 1
 
 class Color(enum.Enum):
@@ -948,7 +952,7 @@ mod build {
                 py.run(
                     pyo3::ffi::c_str!(
                         r#"
-def resolver(parent, info, limit: int = 1):
+def resolver(parent, ctx, limit: int = 1):
     return limit
 "#
                     ),
@@ -1123,10 +1127,10 @@ mod api {
 from grommet.plan import SchemaPlan, TypePlan, FieldPlan, ArgPlan
 from grommet.metadata import TypeKind, TypeSpec, MISSING
 
-async def greet(parent, info, name: str):
-    return f"{info['root']['prefix']}{name}{info['context']['suffix']}"
+async def greet(parent, ctx, name: str):
+    return f"hello {name}"
 
-async def ticks(parent, info, limit: int):
+async def ticks(parent, ctx, limit: int):
     for i in range(limit):
         yield i
 
@@ -1173,8 +1177,6 @@ plan = SchemaPlan(
             locals
                 .set_item("subscription_resolver", subscription_resolver)
                 .unwrap();
-            // Build the TypeSpec for the subscription field type in Rust,
-            // then pass the pre-built object to Python.
             let type_spec = {
                 let meta = py.import("grommet.metadata").unwrap();
                 let ts_cls = meta.getattr("TypeSpec").unwrap();
@@ -1226,12 +1228,49 @@ plan = SchemaPlan(
             locals.get_item("plan").unwrap().unwrap().unbind()
         }
 
+        async fn execute_subscription(wrapper: &SchemaWrapper, query: &str) -> PyResult<Py<PyAny>> {
+            let awaitable = Python::attach(|py| {
+                wrapper
+                    .execute(py, query.to_string(), None, None)
+                    .map(|a| a.unbind())
+            })?;
+            let fut = crate::runtime::into_future(awaitable)?;
+            fut.await
+        }
+
+        fn stream_anext(stream: &Py<PyAny>) -> PyResult<Py<PyAny>> {
+            Python::attach(|py| {
+                let bound = stream.bind(py);
+                let next = bound.call_method0("__anext__")?;
+                Ok(next.unbind())
+            })
+        }
+
+        fn stream_aclose(stream: &Py<PyAny>) -> PyResult<Py<PyAny>> {
+            Python::attach(|py| {
+                let bound = stream.bind(py);
+                let close = bound.call_method0("aclose")?;
+                Ok(close.unbind())
+            })
+        }
+
+        fn stream_is_exhausted(stream: &Py<PyAny>) -> bool {
+            Python::attach(|py| {
+                let bound = stream.bind(py);
+                let cell = bound.cast::<SubscriptionStream>().unwrap();
+                let borrowed = cell.borrow();
+                borrowed.__anext__(py).unwrap().is_none()
+            })
+        }
+
         fn assert_response_has_errors(response: &Bound<'_, PyAny>) {
             if response.is_none() {
                 return;
             }
-            let dict = response.cast::<PyDict>().unwrap();
-            let errors = dict.get_item("errors").unwrap().unwrap();
+            let errors = response.getattr("errors").unwrap();
+            if errors.is_none() {
+                panic!("expected errors but got None");
+            }
             assert!(!errors.cast::<PyList>().unwrap().is_empty());
         }
 
@@ -1248,17 +1287,9 @@ plan = SchemaPlan(
                 sub_vars.set_item("limit", 1).unwrap();
                 let sub_vars = sub_vars.into_any().unbind();
 
-                let root = PyDict::new(py);
-                root.set_item("prefix", "hi ").unwrap();
-                let root = root.into_any().unbind();
-
-                let context = PyDict::new(py);
-                context.set_item("suffix", "!").unwrap();
-                let context = context.into_any().unbind();
-
                 pyo3_async_runtimes::tokio::run(py, async move {
                     let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
-                    let _ = wrapper.sdl()?;
+                    let _ = wrapper.as_sdl()?;
 
                     let awaitable = Python::attach(|py| {
                         wrapper
@@ -1266,42 +1297,36 @@ plan = SchemaPlan(
                                 py,
                                 "query($name: String!) { greet(name: $name) }".to_string(),
                                 Some(query_vars),
-                                Some(root.clone_ref(py)),
-                                Some(context.clone_ref(py)),
+                                None,
                             )
                             .map(|awaitable| awaitable.unbind())
                     })?;
                     let query_result = crate::runtime::into_future(awaitable)?.await?;
                     Python::attach(|py| {
-                        let dict = query_result.bind(py).cast::<PyDict>().unwrap();
-                        assert!(dict.get_item("data").unwrap().is_some());
+                        assert!(!query_result.bind(py).getattr("data").unwrap().is_none());
                     });
 
-                    let stream = Python::attach(|py| {
-                        wrapper.subscribe(
-                            py,
-                            "subscription($limit: Int!) { ticks(limit: $limit) }".to_string(),
-                            Some(sub_vars),
-                            Some(root.clone_ref(py)),
-                            Some(context.clone_ref(py)),
-                        )
+                    let sub_awaitable = Python::attach(|py| {
+                        wrapper
+                            .execute(
+                                py,
+                                "subscription($limit: Int!) { ticks(limit: $limit) }".to_string(),
+                                Some(sub_vars),
+                                None,
+                            )
+                            .map(|a| a.unbind())
                     })?;
+                    let stream = crate::runtime::into_future(sub_awaitable)?.await?;
 
-                    let next = Python::attach(|py| -> PyResult<Py<PyAny>> {
-                        Ok(stream.__anext__(py)?.expect("expected awaitable").unbind())
-                    })?;
+                    let next = stream_anext(&stream)?;
                     let sub_result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| {
-                        let dict = sub_result.bind(py).cast::<PyDict>().unwrap();
-                        assert!(dict.get_item("data").unwrap().is_some());
+                        assert!(!sub_result.bind(py).getattr("data").unwrap().is_none());
                     });
 
-                    let close =
-                        Python::attach(|py| stream.aclose(py).map(|awaitable| awaitable.unbind()))?;
+                    let close = stream_aclose(&stream)?;
                     let _ = crate::runtime::into_future(close)?.await?;
-                    let closed =
-                        Python::attach(|py| Ok::<bool, PyErr>(stream.__anext__(py)?.is_none()))?;
-                    assert!(closed);
+                    assert!(stream_is_exhausted(&stream));
 
                     Ok(())
                 })
@@ -1322,14 +1347,6 @@ plan = SchemaPlan(
                 vars_two.set_item("name", "Turing").unwrap();
                 let vars_two = vars_two.into_any().unbind();
 
-                let root = PyDict::new(py);
-                root.set_item("prefix", "hi ").unwrap();
-                let root = root.into_any().unbind();
-
-                let context = PyDict::new(py);
-                context.set_item("suffix", "!").unwrap();
-                let context = context.into_any().unbind();
-
                 pyo3_async_runtimes::tokio::run(py, async move {
                     let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
 
@@ -1339,8 +1356,7 @@ plan = SchemaPlan(
                                 py,
                                 "query($name: String!) { greet(name: $name) }".to_string(),
                                 Some(vars_one.clone_ref(py)),
-                                Some(root.clone_ref(py)),
-                                Some(context.clone_ref(py)),
+                                None,
                             )
                             .map(|awaitable| awaitable.unbind())
                     })?;
@@ -1350,8 +1366,7 @@ plan = SchemaPlan(
                                 py,
                                 "query($name: String!) { greet(name: $name) }".to_string(),
                                 Some(vars_two.clone_ref(py)),
-                                Some(root.clone_ref(py)),
-                                Some(context.clone_ref(py)),
+                                None,
                             )
                             .map(|awaitable| awaitable.unbind())
                     })?;
@@ -1363,18 +1378,16 @@ plan = SchemaPlan(
                     let res_one = res_one?;
                     let res_two = res_two?;
                     Python::attach(|py| {
-                        let dict = res_one.bind(py).cast::<PyDict>().unwrap();
-                        let data = dict.get_item("data").unwrap().unwrap();
+                        let data = res_one.bind(py).getattr("data").unwrap();
                         let data = data.cast::<PyDict>().unwrap();
                         let greet = data.get_item("greet").unwrap().unwrap();
-                        assert_eq!(greet.extract::<String>().unwrap(), "hi Ada!");
+                        assert_eq!(greet.extract::<String>().unwrap(), "hello Ada");
                     });
                     Python::attach(|py| {
-                        let dict = res_two.bind(py).cast::<PyDict>().unwrap();
-                        let data = dict.get_item("data").unwrap().unwrap();
+                        let data = res_two.bind(py).getattr("data").unwrap();
                         let data = data.cast::<PyDict>().unwrap();
                         let greet = data.get_item("greet").unwrap().unwrap();
-                        assert_eq!(greet.extract::<String>().unwrap(), "hi Turing!");
+                        assert_eq!(greet.extract::<String>().unwrap(), "hello Turing");
                     });
 
                     Ok(())
@@ -1417,9 +1430,9 @@ plan = SchemaPlan(
             .unwrap();
         }
 
-        /// Ensures SchemaWrapper requires root values for parent resolution.
+        /// Ensures SchemaWrapper reports errors for missing parent resolution.
         #[test]
-        fn schema_wrapper_requires_root_for_parent_resolution() {
+        fn schema_wrapper_requires_parent_for_field_resolution() {
             crate::with_py(|py| {
                 let locals = PyDict::new(py);
                 py.run(
@@ -1451,12 +1464,12 @@ plan = SchemaPlan(
 
                     let awaitable = Python::attach(|py| {
                         wrapper
-                            .execute(py, "{ value }".to_string(), None, None, None)
+                            .execute(py, "{ value }".to_string(), None, None)
                             .map(|awaitable| awaitable.unbind())
                     })?;
-                    let without_root = crate::runtime::into_future(awaitable)?.await?;
+                    let without_parent = crate::runtime::into_future(awaitable)?.await?;
                     Python::attach(|py| {
-                        assert_response_has_errors(without_root.bind(py));
+                        assert_response_has_errors(without_parent.bind(py));
                     });
 
                     Ok(())
@@ -1473,14 +1486,14 @@ plan = SchemaPlan(
                 py.run(
                     pyo3::ffi::c_str!(
                         r#"
-async def noop(parent, info):
+async def noop(parent, ctx):
     return 1
 
 class OnlyAnext:
     async def __anext__(self):
         return 1
 
-async def sub_only_anext(parent, info):
+async def sub_only_anext(parent, ctx):
     return OnlyAnext()
 "#
                     ),
@@ -1502,16 +1515,14 @@ async def sub_only_anext(parent, info):
                         )
                     });
                     let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
-                    let stream = Python::attach(|py| {
-                        wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
-                    })?;
-                    let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
+                    let stream = execute_subscription(&wrapper, "subscription { tick }").await?;
+                    let next = stream_anext(&stream)?;
                     let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| {
-                        let dict = result.bind(py).cast::<PyDict>().unwrap();
-                        let data = dict.get_item("data").unwrap().unwrap();
+                        let bound = result.bind(py);
+                        let data = bound.getattr("data").unwrap();
                         if data.is_none() {
-                            assert_response_has_errors(result.bind(py));
+                            assert_response_has_errors(bound);
                         } else {
                             let data = data.cast::<PyDict>().unwrap();
                             assert_eq!(
@@ -1538,13 +1549,13 @@ async def sub_only_anext(parent, info):
                 py.run(
                     pyo3::ffi::c_str!(
                         r#"
-async def noop(parent, info):
+async def noop(parent, ctx):
     return 1
 
 class NotAsync:
     pass
 
-async def sub_not_async(parent, info):
+async def sub_not_async(parent, ctx):
     return NotAsync()
 "#
                     ),
@@ -1561,10 +1572,8 @@ async def sub_not_async(parent, info):
                         build_subscription_plan(py, &noop.bind(py), &sub_not_async.bind(py), "Int!")
                     });
                     let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
-                    let stream = Python::attach(|py| {
-                        wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
-                    })?;
-                    let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
+                    let stream = execute_subscription(&wrapper, "subscription { tick }").await?;
+                    let next = stream_anext(&stream)?;
                     let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| {
                         assert_response_has_errors(result.bind(py));
@@ -1585,7 +1594,7 @@ async def sub_not_async(parent, info):
                 py.run(
                     pyo3::ffi::c_str!(
                         r#"
-async def noop(parent, info):
+async def noop(parent, ctx):
     return 1
 
 class RaiseInAnext:
@@ -1604,20 +1613,20 @@ class OnlyAnext:
     async def __anext__(self):
         return 1
 
-async def sub_raise(parent, info):
+async def sub_raise(parent, ctx):
     return RaiseInAnext()
 
-async def sub_non_awaitable(parent, info):
+async def sub_non_awaitable(parent, ctx):
     return NonAwaitableAnext()
 
-async def sub_stop(parent, info):
+async def sub_stop(parent, ctx):
     if False:
         yield 1
 
-async def sub_error(parent, info):
+async def sub_error(parent, ctx):
     return ErrorAsync()
 
-async def sub_wrong_type(parent, info):
+async def sub_wrong_type(parent, ctx):
     return OnlyAnext()
 "#
                     ),
@@ -1642,13 +1651,11 @@ async def sub_wrong_type(parent, info):
                         build_subscription_plan(py, &noop.bind(py), &sub_raise.bind(py), "Int!")
                     });
                     let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
-                    let stream = Python::attach(|py| {
-                        wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
-                    })?;
-                    let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
+                    let stream = execute_subscription(&wrapper, "subscription { tick }").await?;
+                    let next = stream_anext(&stream)?;
                     let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| assert_response_has_errors(result.bind(py)));
-                    let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
+                    let next = stream_anext(&stream)?;
                     let _ = crate::runtime::into_future(next)?.await;
 
                     let plan = Python::attach(|py| {
@@ -1660,10 +1667,8 @@ async def sub_wrong_type(parent, info):
                         )
                     });
                     let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
-                    let stream = Python::attach(|py| {
-                        wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
-                    })?;
-                    let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
+                    let stream = execute_subscription(&wrapper, "subscription { tick }").await?;
+                    let next = stream_anext(&stream)?;
                     let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| assert_response_has_errors(result.bind(py)));
 
@@ -1671,10 +1676,8 @@ async def sub_wrong_type(parent, info):
                         build_subscription_plan(py, &noop.bind(py), &sub_stop.bind(py), "Int!")
                     });
                     let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
-                    let stream = Python::attach(|py| {
-                        wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
-                    })?;
-                    let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
+                    let stream = execute_subscription(&wrapper, "subscription { tick }").await?;
+                    let next = stream_anext(&stream)?;
                     let result = crate::runtime::into_future(next)?.await;
                     if let Err(err) = result {
                         let is_stop =
@@ -1688,10 +1691,8 @@ async def sub_wrong_type(parent, info):
                         build_subscription_plan(py, &noop.bind(py), &sub_error.bind(py), "Int!")
                     });
                     let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
-                    let stream = Python::attach(|py| {
-                        wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
-                    })?;
-                    let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
+                    let stream = execute_subscription(&wrapper, "subscription { tick }").await?;
+                    let next = stream_anext(&stream)?;
                     let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| assert_response_has_errors(result.bind(py)));
 
@@ -1704,10 +1705,8 @@ async def sub_wrong_type(parent, info):
                         )
                     });
                     let wrapper = Python::attach(|py| SchemaWrapper::new(py, &plan.bind(py)))?;
-                    let stream = Python::attach(|py| {
-                        wrapper.subscribe(py, "subscription { tick }".to_string(), None, None, None)
-                    })?;
-                    let next = Python::attach(|py| stream.__anext__(py).unwrap().unwrap().unbind());
+                    let stream = execute_subscription(&wrapper, "subscription { tick }").await?;
+                    let next = stream_anext(&stream)?;
                     let result = crate::runtime::into_future(next)?.await?;
                     Python::attach(|py| assert_response_has_errors(result.bind(py)));
 

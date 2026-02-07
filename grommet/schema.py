@@ -9,13 +9,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from typing import Any, Protocol
 
-    from .decorators import GrommetClass
-    from .metadata import GrommetMeta, TypeKind
-
-    class MetaType[T: TypeKind](GrommetMeta, Protocol):
-        kind: T
-
-    type RootType = GrommetClass[MetaType[TypeKind.OBJECT]]
+    from .types import RootType
 
     class OperationResult(Protocol):
         """The result of a non-streaming operations."""

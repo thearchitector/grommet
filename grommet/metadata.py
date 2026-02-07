@@ -1,7 +1,7 @@
 import dataclasses
 import enum
 from builtins import type as pytype
-from typing import TYPE_CHECKING, Annotated, Generic, TypeVar
+from typing import TYPE_CHECKING, Annotated, TypeVar
 
 from .errors import list_type_requires_inner, type_meta_unknown_kind
 
@@ -28,13 +28,13 @@ if TYPE_CHECKING:
 else:
     _T = TypeVar("_T")
 
-    class Internal(Generic[_T]):
+    class Internal[_T]:
         """Marks a field as internal so it is excluded from the schema."""
 
         def __class_getitem__(cls, item: _T) -> Annotated[_T, _INTERNAL_MARKER]:
             return Annotated[item, _INTERNAL_MARKER]
 
-    class Private(Generic[_T]):
+    class Private[_T]:
         """Marks a field as private so it is excluded from the schema."""
 
         def __class_getitem__(cls, item: _T) -> Annotated[_T, _INTERNAL_MARKER]:

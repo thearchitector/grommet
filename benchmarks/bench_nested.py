@@ -11,10 +11,9 @@ class Cell:
     j: gm.Internal[int]
 
     @gm.field
-    @staticmethod
-    async def value(parent: "Cell") -> str:
+    async def value(self) -> str:
         await asyncio.sleep(0)
-        return f"Cell {parent.j}"
+        return f"Cell {self.j}"
 
 
 @gm.type
@@ -28,8 +27,7 @@ class Row:
 @dataclass
 class Query:
     @gm.field
-    @staticmethod
-    async def rows(parent: "Query") -> list[Row]:
+    async def rows(self) -> list[Row]:
         return [Row(a=i, cells=[Cell(j=j) for j in range(5)]) for i in range(100000)]
 
 
@@ -38,7 +36,7 @@ async def main() -> None:
     start = time.perf_counter()
     result = await schema.execute("{ rows { a cells { value } } }")
     elapsed = time.perf_counter() - start
-    res = result["data"]
+    res = result.data
     size = len(res["rows"])
     print(f"Fetched {size * 5} cells ({size}x5) in {elapsed:.4f}s")
 

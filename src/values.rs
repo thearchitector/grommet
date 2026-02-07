@@ -11,6 +11,40 @@ use crate::errors::{
 };
 use crate::types::{PyObj, ScalarBinding};
 
+#[pyclass(module = "grommet._core", name = "OperationResult")]
+pub(crate) struct OperationResult {
+    #[pyo3(get)]
+    data: Py<PyAny>,
+    #[pyo3(get)]
+    errors: Py<PyAny>,
+    #[pyo3(get)]
+    extensions: Py<PyAny>,
+}
+
+#[pymethods]
+impl OperationResult {
+    fn __repr__(&self) -> PyResult<String> {
+        Python::attach(|py| {
+            let data = self.data.bind(py);
+            let errors = self.errors.bind(py);
+            Ok(format!(
+                "OperationResult(data={}, errors={})",
+                data.repr()?,
+                errors.repr()?,
+            ))
+        })
+    }
+
+    fn __getitem__(&self, py: Python<'_>, key: &str) -> PyResult<Py<PyAny>> {
+        match key {
+            "data" => Ok(self.data.clone_ref(py)),
+            "errors" => Ok(self.errors.clone_ref(py)),
+            "extensions" => Ok(self.extensions.clone_ref(py)),
+            _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
+        }
+    }
+}
+
 // translate values between python and async-graphql
 pub(crate) fn build_kwargs<'py>(
     py: Python<'py>,
@@ -338,54 +372,67 @@ pub(crate) fn response_to_py<'py>(
     py: Python<'py>,
     response: async_graphql::Response,
 ) -> PyResult<Py<PyAny>> {
-    let out = PyDict::new(py);
-    out.set_item("data", value_to_py(py, &response.data)?)?;
+    let data = value_to_py(py, &response.data)?;
 
     let extensions_dict = PyDict::new(py);
     for (key, value) in response.extensions {
         extensions_dict.set_item(key, value_to_py(py, &value)?)?;
     }
-    out.set_item("extensions", extensions_dict)?;
+    let extensions = if extensions_dict.is_empty() {
+        py.None()
+    } else {
+        extensions_dict.into_any().unbind()
+    };
 
-    let errors_list = PyList::empty(py);
-    for err in response.errors {
-        let err_dict = PyDict::new(py);
-        err_dict.set_item("message", err.message)?;
-        if !err.locations.is_empty() {
-            let locs = PyList::empty(py);
-            for loc in err.locations {
-                let loc_dict = PyDict::new(py);
-                loc_dict.set_item("line", loc.line)?;
-                loc_dict.set_item("column", loc.column)?;
-                locs.append(loc_dict)?;
+    let errors = if response.errors.is_empty() {
+        py.None()
+    } else {
+        let errors_list = PyList::empty(py);
+        for err in response.errors {
+            let err_dict = PyDict::new(py);
+            err_dict.set_item("message", err.message)?;
+            if !err.locations.is_empty() {
+                let locs = PyList::empty(py);
+                for loc in err.locations {
+                    let loc_dict = PyDict::new(py);
+                    loc_dict.set_item("line", loc.line)?;
+                    loc_dict.set_item("column", loc.column)?;
+                    locs.append(loc_dict)?;
+                }
+                err_dict.set_item("locations", locs)?;
             }
-            err_dict.set_item("locations", locs)?;
-        }
-        let path_list = PyList::empty(py);
-        if !err.path.is_empty() {
-            for seg in err.path {
-                match seg {
-                    async_graphql::PathSegment::Field(name) => {
-                        path_list.append(name)?;
-                    }
-                    async_graphql::PathSegment::Index(index) => {
-                        path_list.append(index)?;
+            let path_list = PyList::empty(py);
+            if !err.path.is_empty() {
+                for seg in err.path {
+                    match seg {
+                        async_graphql::PathSegment::Field(name) => {
+                            path_list.append(name)?;
+                        }
+                        async_graphql::PathSegment::Index(index) => {
+                            path_list.append(index)?;
+                        }
                     }
                 }
             }
-        }
-        if path_list.len() > 0 {
-            err_dict.set_item("path", path_list)?;
-        }
-        if let Some(extensions) = err.extensions {
-            let ext_value = async_graphql::to_value(extensions)
-                .map_err(|err| py_value_error(err.to_string()))?;
-            if !matches!(ext_value, Value::Object(ref map) if map.is_empty()) {
-                err_dict.set_item("extensions", value_to_py(py, &ext_value)?)?;
+            if path_list.len() > 0 {
+                err_dict.set_item("path", path_list)?;
             }
+            if let Some(extensions) = err.extensions {
+                let ext_value = async_graphql::to_value(extensions)
+                    .map_err(|err| py_value_error(err.to_string()))?;
+                if !matches!(ext_value, Value::Object(ref map) if map.is_empty()) {
+                    err_dict.set_item("extensions", value_to_py(py, &ext_value)?)?;
+                }
+            }
+            errors_list.append(err_dict)?;
         }
-        errors_list.append(err_dict)?;
-    }
-    out.set_item("errors", errors_list)?;
-    Ok(out.into_any().unbind())
+        errors_list.into_any().unbind()
+    };
+
+    let result = OperationResult {
+        data,
+        errors,
+        extensions,
+    };
+    Ok(result.into_pyobject(py)?.into_any().unbind())
 }

@@ -62,28 +62,23 @@ class QueryWithAllTypes:
     simple: str
 
     @gm.field
-    @staticmethod
-    async def with_scalar(value: CustomScalar) -> str:
+    async def with_scalar(self, value: CustomScalar) -> str:
         return str(value)
 
     @gm.field
-    @staticmethod
-    async def with_enum(status: Status) -> str:
+    async def with_enum(self, status: Status) -> str:
         return status.value
 
     @gm.field
-    @staticmethod
-    async def with_union() -> TestUnion:
+    async def with_union(self) -> TestUnion:
         return TypeA(name="test")
 
     @gm.field
-    @staticmethod
-    async def with_interface() -> Node:
+    async def with_interface(self) -> Node:
         return ConcreteNode(id=1, label="test")
 
     @gm.field
-    @staticmethod
-    async def with_input(filter: FilterInput) -> str:
+    async def with_input(self, filter: FilterInput) -> str:
         return filter.status.value
 
 
@@ -127,8 +122,7 @@ def test_plan_handles_union_as_entrypoint() -> None:
     @dataclass
     class QueryWithUnionField:
         @gm.field
-        @staticmethod
-        async def get_item() -> TestUnion:
+        async def get_item(self) -> TestUnion:
             return TypeA(name="test")
 
     plan = build_schema_plan(query=QueryWithUnionField)
@@ -148,8 +142,7 @@ def test_plan_skips_unannotated_resolver_arg() -> None:
     @dataclass
     class TypeWithUnannotated:
         @gm.field
-        @staticmethod
-        async def compute(parent, info, annotated: int, unannotated) -> int:  # type: ignore[no-untyped-def]
+        async def compute(self, annotated: int, unannotated) -> int:  # type: ignore[no-untyped-def]
             return annotated
 
     from grommet.annotations import _get_type_meta
@@ -168,7 +161,7 @@ def test_plan_interface_field_resolver_not_keyed() -> None:
     """Ensures interface fields with resolvers are kept but not assigned resolver keys."""
     from grommet.plan import FieldPlan, TypePlan, _wrap_plan_resolvers
 
-    async def dummy(parent: None, info: object) -> int:
+    async def dummy(self: object) -> int:
         return 1  # pragma: no cover
 
     iface_plan = TypePlan(

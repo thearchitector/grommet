@@ -323,10 +323,9 @@ def _build_field_plans(
 
         if field_meta.resolver is not None:
             arg_annotations = _resolver_arg_annotations(field_meta.resolver)
-            from .resolver import _RESERVED_PARAM_NAMES, _resolver_params
+            from .resolver import _resolver_arg_params
 
-            params = _resolver_params(field_meta.resolver)
-            arg_params = [p for p in params if p.name not in _RESERVED_PARAM_NAMES]
+            arg_params = _resolver_arg_params(field_meta.resolver)
 
             for param in arg_params:
                 arg_annotation = arg_annotations.get(param.name, param.annotation)

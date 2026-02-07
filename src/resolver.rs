@@ -9,8 +9,9 @@ use pyo3::types::{PyAnyMethods, PyDict, PyTuple};
 use pyo3_async_runtimes::tokio;
 
 use crate::errors::{no_parent_value, py_err_to_error, subscription_requires_async_iterator};
+use crate::lookahead::extract_lookahead;
 use crate::runtime::await_awaitable;
-use crate::types::{ContextValue, FieldContext, PyObj, RootValue, ScalarBinding};
+use crate::types::{FieldContext, PyObj, ScalarBinding, StateValue};
 use crate::values::{build_kwargs, py_to_field_value_for_type};
 
 pub(crate) async fn resolve_field(
@@ -21,7 +22,6 @@ pub(crate) async fn resolve_field(
         ctx,
         field_ctx.resolver.clone(),
         &field_ctx.arg_names,
-        &field_ctx.field_name,
         &field_ctx.source_name,
         false,
     )
@@ -47,7 +47,6 @@ pub(crate) async fn resolve_subscription_stream<'a>(
         ctx,
         field_ctx.resolver.clone(),
         &field_ctx.arg_names,
-        &field_ctx.field_name,
         &field_ctx.source_name,
         true,
     )
@@ -108,11 +107,10 @@ async fn resolve_value(
     ctx: ResolverContext<'_>,
     resolver: Option<PyObj>,
     arg_names: &[String],
-    field_name: &str,
     source_name: &str,
     is_subscription: bool,
 ) -> Result<Py<PyAny>, Error> {
-    let (root_value, context, parent) = extract_context(&ctx);
+    let (state, parent) = extract_state(&ctx);
 
     let has_resolver = resolver.is_some();
     let value = if let Some(resolver) = resolver {
@@ -121,11 +119,9 @@ async fn resolve_value(
                 py,
                 &ctx,
                 &resolver,
-                &arg_names,
-                field_name,
+                arg_names,
                 parent.as_ref(),
-                root_value.as_ref(),
-                context.as_ref(),
+                state.as_ref(),
             )
         })
         .map_err(py_err_to_error)?
@@ -159,16 +155,29 @@ async fn resolve_value(
     await_value(value).await
 }
 
-fn extract_context(ctx: &ResolverContext<'_>) -> (Option<PyObj>, Option<PyObj>, Option<PyObj>) {
-    let root_value = ctx.data::<RootValue>().ok().map(|root| root.0.clone());
-    let context = ctx.data::<ContextValue>().ok().map(|ctx| ctx.0.clone());
-    let parent = ctx
-        .parent_value
-        .try_downcast_ref::<PyObj>()
-        .ok()
-        .cloned()
-        .or_else(|| root_value.clone());
-    (root_value, context, parent)
+fn extract_state(ctx: &ResolverContext<'_>) -> (Option<PyObj>, Option<PyObj>) {
+    let state = ctx.data::<StateValue>().ok().map(|s| s.0.clone());
+    let parent = ctx.parent_value.try_downcast_ref::<PyObj>().ok().cloned();
+    (state, parent)
+}
+
+fn build_context_obj(
+    py: Python<'_>,
+    ctx: &ResolverContext<'_>,
+    state: Option<&PyObj>,
+) -> PyResult<Py<PyAny>> {
+    let lookahead = extract_lookahead(ctx);
+    let lookahead_py = lookahead.into_pyobject(py)?.into_any().unbind();
+    let state_py = match state {
+        Some(s) => s.clone_ref(py),
+        None => py.None(),
+    };
+    let context_cls = py.import("grommet.context")?.getattr("Context")?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("_lookahead", lookahead_py)?;
+    kwargs.set_item("state", state_py)?;
+    let context_obj = context_cls.call((), Some(&kwargs))?;
+    Ok(context_obj.unbind())
 }
 
 fn call_resolver(
@@ -176,29 +185,16 @@ fn call_resolver(
     ctx: &ResolverContext<'_>,
     resolver: &PyObj,
     arg_names: &[String],
-    field_name: &str,
     parent: Option<&PyObj>,
-    root_value: Option<&PyObj>,
-    context: Option<&PyObj>,
+    state: Option<&PyObj>,
 ) -> PyResult<Py<PyAny>> {
     let kwargs = build_kwargs(py, ctx, arg_names)?;
-    let info = PyDict::new(py);
-    info.set_item("field_name", field_name)?;
-    if let Some(ctx_obj) = context {
-        info.set_item("context", ctx_obj.bind(py))?;
-    } else {
-        info.set_item("context", py.None())?;
-    }
-    if let Some(root_obj) = root_value {
-        info.set_item("root", root_obj.bind(py))?;
-    } else {
-        info.set_item("root", py.None())?;
-    }
+    let context_obj = build_context_obj(py, ctx, state)?;
     let parent_obj = match parent {
         Some(parent) => parent.clone_ref(py),
         None => py.None(),
     };
-    let args = PyTuple::new(py, [parent_obj, info.into_any().unbind()])?;
+    let args = PyTuple::new(py, [parent_obj, context_obj])?;
     let result = resolver.clone_ref(py).call(py, args, Some(&kwargs))?;
     Ok(result)
 }

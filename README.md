@@ -34,7 +34,7 @@ class Query:
 
 schema = grommet.Schema(query=Query)
 result = asyncio.run(schema.execute("{ greeting }"))
-print(result)  # {'data': {'greeting': 'Hello, world!'}}
+print(result.data)  # {'greeting': 'Hello, world!'}
 ```
 
 Use `grommet.field` to define fields from resolvers with required and optional arguments:
@@ -49,10 +49,10 @@ class Query:
 
 schema = grommet.Schema(query=Query)
 result = asyncio.run(schema.execute('{ hello(name: "grommet") }'))
-print(result)  # {'data': {'hello': 'Hello, grommet!'}}
+print(result.data)  # {'hello': 'Hello, grommet!'}
 
 result = asyncio.run(schema.execute('{ hello(name: "Gromit", title: "Mr.") }'))
-print(result)  # {'data': {'hello': 'Hello, Mr. Gromit!'}}
+print(result.data)  # {'hello': 'Hello, Mr. Gromit!'}
 ```
 
 Add mutations by defining a separate mutation type:
@@ -128,7 +128,7 @@ class Query:
 
 schema = grommet.Schema(query=Query)
 result = asyncio.run(schema.execute("{ greeting }", state=MyState(request_id="123")))
-print(result)  # {'data': {'greeting': 'Hello request 123!'}}
+print(result.data)  # {'greeting': 'Hello request 123!'}
 ```
 
 Analyze the current operation by peeking into the execution context:
@@ -162,11 +162,11 @@ class Query:
         return Object()
 
 schema = grommet.Schema(query=Query)
-result = asyncio.run(schema.execute("{ obj { a } }"))
+asyncio.run(schema.execute("{ obj { a } }"))
 # >>> requests a: True
 # >>> requests b: False
 
-result = asyncio.run(schema.execute("{ obj { sub { b } } }"))
+asyncio.run(schema.execute("{ obj { sub { b } } }"))
 # >>> requests a: False
 # >>> requests b: True
 ```

@@ -1,6 +1,5 @@
 import dataclasses
 import enum
-import functools
 import types
 from dataclasses import dataclass
 
@@ -13,15 +12,12 @@ from grommet.metadata import MISSING
 
 
 def test_field_defaults_and_init_false() -> None:
-    """
-    Verifies field defaults set init to false for grommet fields.
-    """
+    """Verifies field defaults set init to false for grommet fields."""
 
     @dataclass
     class Query:
         @gm.field(default=5)
-        @staticmethod
-        async def count(parent, info) -> int:  # pragma: no cover - called via schema
+        async def count(self) -> int:  # pragma: no cover - called via schema
             return 5
 
     Query = gm.type(Query)
@@ -31,15 +27,12 @@ def test_field_defaults_and_init_false() -> None:
 
 
 def test_field_default_factory_applied() -> None:
-    """
-    Verifies field default_factory is preserved on grommet fields.
-    """
+    """Verifies field default_factory is preserved on grommet fields."""
 
     @dataclass
     class Query:
         @gm.field(default_factory=lambda: 7)
-        @staticmethod
-        async def count(parent, info) -> int:  # pragma: no cover - called via schema
+        async def count(self) -> int:  # pragma: no cover - called via schema
             return 7
 
     Query = gm.type(Query)
@@ -49,11 +42,9 @@ def test_field_default_factory_applied() -> None:
 
 
 def test_field_from_resolver_defaults_init_false() -> None:
-    """
-    Ensures fields derived from resolvers default to init=False.
-    """
+    """Ensures fields derived from resolvers default to init=False."""
 
-    def resolver(parent, info) -> int:
+    def resolver(self) -> int:
         return 1
 
     field = _field_from_resolver(
@@ -69,11 +60,9 @@ def test_field_from_resolver_defaults_init_false() -> None:
 
 
 def test_field_from_resolver_respects_init() -> None:
-    """
-    Ensures field generation respects an explicit init flag.
-    """
+    """Ensures field generation respects an explicit init flag."""
 
-    def resolver(parent, info) -> int:
+    def resolver(self) -> int:
         return 1
 
     field = _field_from_resolver(
@@ -89,15 +78,12 @@ def test_field_from_resolver_respects_init() -> None:
 
 
 def test_field_default_conflict_raises() -> None:
-    """
-    Ensures specifying both default and default_factory raises errors.
-    """
+    """Ensures specifying both default and default_factory raises errors."""
 
     @dataclass
     class Query:
         @gm.field(default=1, default_factory=lambda: 2)
-        @staticmethod
-        async def count(parent, info) -> int:  # pragma: no cover - called via schema
+        async def count(self) -> int:  # pragma: no cover - called via schema
             return 1
 
     with pytest.raises(GrommetTypeError):
@@ -105,15 +91,12 @@ def test_field_default_conflict_raises() -> None:
 
 
 def test_missing_return_annotation_raises() -> None:
-    """
-    Ensures missing resolver return annotations raise a type error.
-    """
+    """Ensures missing resolver return annotations raise a type error."""
 
     @dataclass
     class Query:
         @gm.field
-        @staticmethod
-        async def count(parent, info):  # type: ignore[no-untyped-def]
+        async def count(self):  # type: ignore[no-untyped-def]
             return 1
 
     with pytest.raises(GrommetTypeError):
@@ -121,15 +104,12 @@ def test_missing_return_annotation_raises() -> None:
 
 
 def test_existing_annotation_skips_return_inference() -> None:
-    """
-    Verifies explicit field annotations are preserved without inference.
-    """
+    """Verifies explicit field annotations are preserved without inference."""
 
     @dataclass
     class Query:
         @gm.field
-        @staticmethod
-        async def count(parent, info) -> int:  # pragma: no cover - called via schema
+        async def count(self) -> int:  # pragma: no cover - called via schema
             return 1
 
     Query.__annotations__ = {"count": int}
@@ -138,15 +118,12 @@ def test_existing_annotation_skips_return_inference() -> None:
 
 
 def test_annotations_mappingproxy_is_coerced() -> None:
-    """
-    Verifies mappingproxy annotations are coerced to dictionaries.
-    """
+    """Verifies mappingproxy annotations are coerced to dictionaries."""
 
     @dataclass
     class Query:
         @gm.field
-        @staticmethod
-        async def count(parent, info) -> int:  # pragma: no cover - called via schema
+        async def count(self) -> int:  # pragma: no cover - called via schema
             return 1
 
     Query.__annotations__ = types.MappingProxyType(Query.__annotations__)
@@ -154,37 +131,37 @@ def test_annotations_mappingproxy_is_coerced() -> None:
     assert isinstance(Query.__annotations__, dict)
 
 
-def test_classmethod_field_binds_class() -> None:
-    """
-    Verifies classmethod field resolvers bind the class object.
-    """
+def test_staticmethod_field_raises() -> None:
+    """Ensures @staticmethod field resolvers raise a type error."""
+    with pytest.raises(GrommetTypeError):
 
-    @dataclass
-    class Query:
-        @gm.field
-        @classmethod
-        async def typename(
-            cls, parent, info
-        ) -> str:  # pragma: no cover - called via schema
-            return cls.__name__
+        @dataclass
+        class Query:
+            @gm.field
+            @staticmethod
+            async def count() -> int:  # pragma: no cover
+                return 1
 
-    Query = gm.type(Query)
-    field = dataclasses.fields(Query)[0]
-    meta = field.metadata["grommet"]
-    assert isinstance(meta.resolver, functools.partial)
-    assert meta.resolver.args[0] is Query
+
+def test_classmethod_field_raises() -> None:
+    """Ensures @classmethod field resolvers raise a type error."""
+    with pytest.raises(GrommetTypeError):
+
+        @dataclass
+        class Query:
+            @gm.field
+            @classmethod
+            async def typename(cls) -> str:  # pragma: no cover
+                return cls.__name__
 
 
 def test_input_with_field_resolver_not_allowed() -> None:
-    """
-    Ensures input types cannot declare field resolvers.
-    """
+    """Ensures input types cannot declare field resolvers."""
 
     @dataclass
     class Input:
         @gm.field
-        @staticmethod
-        async def count(parent, info) -> int:  # pragma: no cover - called via schema
+        async def count(self) -> int:  # pragma: no cover - called via schema
             return 1
 
     with pytest.raises(GrommetTypeError):
@@ -192,15 +169,12 @@ def test_input_with_field_resolver_not_allowed() -> None:
 
 
 def test_interface_with_field_resolver_rewraps_dataclass() -> None:
-    """
-    Verifies interface decorator rewraps dataclasses with field resolvers.
-    """
+    """Verifies interface decorator rewraps dataclasses with field resolvers."""
 
     @dataclass
     class Node:
         @gm.field
-        @staticmethod
-        async def id(parent, info) -> int:  # pragma: no cover - called via schema
+        async def id(self) -> int:  # pragma: no cover - called via schema
             return 1
 
     Node = gm.interface(Node)

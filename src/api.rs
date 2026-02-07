@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_graphql::dynamic::Schema;
 use async_graphql::futures_util::stream::{BoxStream, StreamExt};
+use async_graphql::parser::{parse_query, types::OperationType};
 use async_graphql::{Request, Variables};
 use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
@@ -12,7 +13,7 @@ use crate::build::build_schema;
 use crate::errors::runtime_threads_conflict;
 use crate::parse::parse_schema_plan;
 use crate::runtime::future_into_py;
-use crate::types::{ContextValue, PyObj, RootValue, ScalarBinding};
+use crate::types::{PyObj, ScalarBinding, StateValue};
 use crate::values::{py_to_const_value, response_to_py};
 
 #[pyclass(module = "grommet._core", name = "Schema")]
@@ -40,21 +41,29 @@ impl SchemaWrapper {
         &self,
         query: String,
         variables: Option<Py<PyAny>>,
-        root: Option<Py<PyAny>>,
-        context: Option<Py<PyAny>>,
+        state: Option<Py<PyAny>>,
     ) -> PyResult<Request> {
         let vars_value = self.convert_variables(variables)?;
         let mut request = Request::new(query);
         if let Some(vars) = vars_value {
             request = request.variables(Variables::from_value(vars));
         }
-        if let Some(obj) = root {
-            request = request.data(RootValue(PyObj::new(obj)));
-        }
-        if let Some(obj) = context {
-            request = request.data(ContextValue(PyObj::new(obj)));
+        if let Some(obj) = state {
+            request = request.data(StateValue(PyObj::new(obj)));
         }
         Ok(request)
+    }
+
+    fn is_subscription(query: &str) -> bool {
+        let Ok(doc) = parse_query(query) else {
+            return false;
+        };
+        for (_name, op) in doc.operations.iter() {
+            if op.node.ty == OperationType::Subscription {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -80,7 +89,7 @@ impl SchemaWrapper {
         })
     }
 
-    fn sdl(&self) -> PyResult<String> {
+    fn as_sdl(&self) -> PyResult<String> {
         Ok(self.schema.sdl())
     }
 
@@ -89,31 +98,27 @@ impl SchemaWrapper {
         py: Python<'py>,
         query: String,
         variables: Option<Py<PyAny>>,
-        root: Option<Py<PyAny>>,
-        context: Option<Py<PyAny>>,
+        state: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let request = self.build_request(query, variables, root, context)?;
+        let is_sub = Self::is_subscription(&query);
+        let request = self.build_request(query, variables, state)?;
         let schema = self.schema.clone();
-        future_into_py(py, async move {
-            let response = schema.execute(request).await;
-            Python::attach(|py| response_to_py(py, response))
-        })
-    }
 
-    fn subscribe(
-        &self,
-        _py: Python,
-        query: String,
-        variables: Option<Py<PyAny>>,
-        root: Option<Py<PyAny>>,
-        context: Option<Py<PyAny>>,
-    ) -> PyResult<SubscriptionStream> {
-        let request = self.build_request(query, variables, root, context)?;
-        let stream = self.schema.execute_stream(request);
-        Ok(SubscriptionStream {
-            stream: Arc::new(Mutex::new(Some(stream))),
-            closed: Arc::new(AtomicBool::new(false)),
-        })
+        if is_sub {
+            future_into_py(py, async move {
+                let stream = schema.execute_stream(request);
+                let sub_stream = SubscriptionStream {
+                    stream: Arc::new(Mutex::new(Some(stream))),
+                    closed: Arc::new(AtomicBool::new(false)),
+                };
+                Python::attach(|py| Ok(sub_stream.into_pyobject(py)?.into_any().unbind()))
+            })
+        } else {
+            future_into_py(py, async move {
+                let response = schema.execute(request).await;
+                Python::attach(|py| response_to_py(py, response))
+            })
+        }
     }
 }
 

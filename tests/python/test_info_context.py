@@ -1,39 +1,39 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-import pytest
 
 import grommet as gm
 
-if TYPE_CHECKING:
-    from typing import Any
 
-
-@pytest.mark.anyio
-async def test_info_context_root_are_available() -> None:
-    """
-    Verifies resolvers receive info, context, root, and parent objects.
-    """
-    root_obj = object()
-    context_obj = object()
+async def test_context_state_is_available() -> None:
+    """Verifies resolvers receive Context with state."""
+    state_obj = {"key": "value"}
 
     @gm.type
     @dataclass
     class Query:
         @gm.field
-        @staticmethod
-        async def inspect(
-            parent: "Any", info: gm.Info, context: "Any", root: "Any"
-        ) -> str:
-            assert info.field_name == "inspect"
-            assert info.context is context_obj
-            assert info.root is root_obj
-            assert parent is root_obj
-            assert context is context_obj
-            assert root is root_obj
+        async def inspect(self, ctx: gm.Context[dict]) -> str:
+            assert ctx.state is state_obj
             return "ok"
 
     schema = gm.Schema(query=Query)
-    result = await schema.execute("{ inspect }", root=root_obj, context=context_obj)
+    result = await schema.execute("{ inspect }", state=state_obj)
 
-    assert result["data"]["inspect"] == "ok"
+    assert result.data["inspect"] == "ok"
+
+
+async def test_context_lookahead() -> None:
+    """Verifies resolvers can use look_ahead and field on Context."""
+
+    @gm.type
+    @dataclass
+    class Query:
+        @gm.field
+        async def check(self, ctx: gm.Context) -> str:
+            la = ctx.look_ahead()
+            assert la.exists()
+            return "ok"
+
+    schema = gm.Schema(query=Query)
+    result = await schema.execute("{ check }")
+
+    assert result.data["check"] == "ok"

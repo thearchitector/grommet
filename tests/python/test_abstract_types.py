@@ -1,13 +1,7 @@
 import enum
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-import pytest
 
 import grommet as gm
-
-if TYPE_CHECKING:
-    from typing import Any
 
 
 @gm.enum
@@ -20,8 +14,7 @@ class Color(enum.Enum):
 @dataclass
 class ColorQuery:
     @gm.field
-    @staticmethod
-    async def paint(parent: "Any", info: "Any", color: Color) -> Color:
+    async def paint(self, color: Color) -> Color:
         assert isinstance(color, Color)
         return color
 
@@ -42,8 +35,7 @@ class User(Node):
 @dataclass
 class NodeQuery:
     @gm.field
-    @staticmethod
-    async def node(parent: "Any", info: "Any") -> Node:
+    async def node(self) -> Node:
         return User(id=gm.ID("1"), name="Ada")
 
 
@@ -66,14 +58,12 @@ SearchResult = gm.union("SearchResult", types=[Book, Movie])
 @dataclass
 class SearchQuery:
     @gm.field
-    @staticmethod
-    async def result(parent: "Any", info: "Any", kind: str) -> SearchResult:  # type: ignore[valid-type]
+    async def result(self, kind: str) -> SearchResult:  # type: ignore[valid-type]
         if kind == "book":
             return Book(title="Dune")
         return Movie(title="Alien")
 
 
-@pytest.mark.anyio
 async def test_enum_input_output() -> None:
     """
     Verifies enum inputs are accepted and serialized in responses.
@@ -83,10 +73,9 @@ async def test_enum_input_output() -> None:
         "query ($color: Color!) { paint(color: $color) }", variables={"color": "RED"}
     )
 
-    assert result["data"]["paint"] == "RED"
+    assert result.data["paint"] == "RED"
 
 
-@pytest.mark.anyio
 async def test_interface_resolution() -> None:
     """
     Verifies interface results resolve to implementing types in responses.
@@ -94,10 +83,9 @@ async def test_interface_resolution() -> None:
     schema = gm.Schema(query=NodeQuery)
     result = await schema.execute("{ node { id ... on User { name } } }")
 
-    assert result["data"]["node"] == {"id": "1", "name": "Ada"}
+    assert result.data["node"] == {"id": "1", "name": "Ada"}
 
 
-@pytest.mark.anyio
 async def test_union_resolution() -> None:
     """
     Verifies union selections return the matched object fields.
@@ -108,4 +96,4 @@ async def test_union_resolution() -> None:
         variables={"kind": "book"},
     )
 
-    assert result["data"]["result"] == {"title": "Dune"}
+    assert result.data["result"] == {"title": "Dune"}

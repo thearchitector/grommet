@@ -1,20 +1,13 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-import pytest
 
 import grommet as gm
-
-if TYPE_CHECKING:
-    from typing import Any
 
 
 @gm.type
 @dataclass
 class ArgDefaultQuery:
     @gm.field
-    @staticmethod
-    async def greet(parent: "Any", info: "Any", name: str = "Ada") -> str:
+    async def greet(self, name: str = "Ada") -> str:
         return f"hi {name}"
 
 
@@ -28,8 +21,7 @@ class Options:
 @dataclass
 class InputDefaultQuery:
     @gm.field
-    @staticmethod
-    async def enabled(parent: "Any", info: "Any", options: Options) -> bool:
+    async def enabled(self, options: Options) -> bool:
         return options.enabled
 
 
@@ -37,12 +29,10 @@ class InputDefaultQuery:
 @dataclass
 class InputValidationQuery:
     @gm.field
-    @staticmethod
-    async def enabled(parent: "Any", info: "Any", options: Options) -> bool:
+    async def enabled(self, options: Options) -> bool:
         return options.enabled
 
 
-@pytest.mark.anyio
 async def test_argument_default_value_is_applied() -> None:
     """
     Verifies argument default values are applied when omitted.
@@ -50,10 +40,9 @@ async def test_argument_default_value_is_applied() -> None:
     schema = gm.Schema(query=ArgDefaultQuery)
     result = await schema.execute("{ greet }")
 
-    assert result["data"]["greet"] == "hi Ada"
+    assert result.data["greet"] == "hi Ada"
 
 
-@pytest.mark.anyio
 async def test_input_field_default_value_is_applied() -> None:
     """
     Verifies input field defaults are applied when input objects are empty.
@@ -64,10 +53,9 @@ async def test_input_field_default_value_is_applied() -> None:
         variables={"options": {}},
     )
 
-    assert result["data"]["enabled"] is True
+    assert result.data["enabled"] is True
 
 
-@pytest.mark.anyio
 async def test_invalid_input_value_reports_error() -> None:
     """
     Ensures invalid input values return GraphQL errors.
@@ -78,4 +66,4 @@ async def test_invalid_input_value_reports_error() -> None:
         variables={"options": "nope"},
     )
 
-    assert result["errors"], "Expected input validation error"
+    assert result.errors, "Expected input validation error"

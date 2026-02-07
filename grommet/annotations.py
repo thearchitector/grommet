@@ -1,16 +1,9 @@
-import sys
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import (
-    TYPE_CHECKING,
-    Annotated,
-    ClassVar,
-    get_args,
-    get_origin,
-    get_type_hints,
-)
+from typing import TYPE_CHECKING, Annotated, ClassVar, cast, get_args, get_origin
 
+from .context import Context
 from .errors import (
     async_iterable_requires_parameter,
     input_type_expected,
@@ -49,14 +42,18 @@ _NONE_TYPE = type(None)
 
 
 def _resolve_type_hints(obj: "Any") -> dict[str, "Any"]:
+    from typing import get_type_hints
+
     try:
-        globalns = vars(sys.modules[obj.__module__])
-        localns = dict(vars(obj))
-        return get_type_hints(
-            obj, globalns=globalns, localns=localns, include_extras=True
-        )
+        return get_type_hints(obj, include_extras=True)
     except Exception:
-        return getattr(obj, "__annotations__", {})
+        try:
+            _alib = __import__("annotationlib")
+            return cast(
+                dict[str, "Any"], _alib.get_annotations(obj, format=_alib.Format.VALUE)
+            )
+        except Exception:
+            return cast(dict[str, "Any"], getattr(obj, "__annotations__", {}))
 
 
 @lru_cache(maxsize=512)
@@ -90,6 +87,7 @@ class AnnotationInfo:
     async_item: "Any | None"
     is_classvar: bool
     is_internal: bool
+    is_context: bool
 
 
 def analyze_annotation(annotation: "Any") -> AnnotationInfo:
@@ -110,6 +108,7 @@ def analyze_annotation(annotation: "Any") -> AnnotationInfo:
     async_item = args[0] if is_async_iterable and args else None
     is_classvar = origin is ClassVar
     is_internal = _INTERNAL_MARKER in metadata
+    is_context = inner is Context or get_origin(inner) is Context
     return AnnotationInfo(
         annotation=annotation,
         inner=inner,
@@ -123,6 +122,7 @@ def analyze_annotation(annotation: "Any") -> AnnotationInfo:
         async_item=async_item,
         is_classvar=is_classvar,
         is_internal=is_internal,
+        is_context=is_context,
     )
 
 
@@ -168,6 +168,8 @@ def walk_annotation(annotation: "Any") -> "Iterator[tuple[str, pytype]]":
     Handles optional, list, and async-iterable wrappers.
     """
     info = analyze_annotation(annotation)
+    if info.is_context:
+        return
     inner = info.async_item if info.is_async_iterable else info.inner
     if inner is None:
         return
@@ -177,6 +179,8 @@ def walk_annotation(annotation: "Any") -> "Iterator[tuple[str, pytype]]":
 def _walk_inner(inner: "Any") -> "Iterator[tuple[str, pytype]]":
     """Recursively walk an unwrapped inner type."""
     info = analyze_annotation(inner)
+    if info.is_context:
+        return
     if info.is_list:
         if info.list_item is None:
             raise list_type_requires_parameter()
@@ -210,6 +214,8 @@ def _type_spec_from_annotation(
     annotation: "Any", *, expect_input: bool, force_nullable: bool = False
 ) -> TypeSpec:
     info = analyze_annotation(annotation)
+    if info.is_context:
+        raise unsupported_annotation(annotation)
     inner = info.inner
     nullable = info.optional or force_nullable
     if info.is_list:

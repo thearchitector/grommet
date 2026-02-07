@@ -1,3 +1,4 @@
+from .context import Context
 from .decorators import enum_type as enum
 from .decorators import field, input, interface, scalar, type, union
 from .errors import (
@@ -6,7 +7,6 @@ from .errors import (
     GrommetTypeError,
     GrommetValueError,
 )
-from .info import Info
 from .metadata import ID, Internal, Private
 from .runtime import configure_runtime
 from .schema import Schema
@@ -21,7 +21,7 @@ __all__ = [
     "union",
     "enum",
     "ID",
-    "Info",
+    "Context",
     "configure_runtime",
     "Internal",
     "Private",

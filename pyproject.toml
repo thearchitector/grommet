@@ -7,9 +7,8 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Natural Language :: English",
-    "Programming Language :: Python :: 3.13",
+    # "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
-    "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Rust",
     "Typing :: Typed"
 ]
@@ -20,7 +19,9 @@ authors = [
 license = "BSD-3-Clause-Clear"
 readme = "README.md"
 requires-python = ">=3.14,<4"
-dependencies = []
+dependencies = [
+    "typing-extensions~=4.15;python_version<'3.14'",
+]
 
 [project.urls]
 Homepage = "https://github.com/thearchitector/grommet"
@@ -30,7 +31,7 @@ Issues = "https://github.com/thearchitector/grommet/issues"
 [dependency-groups]
 dev = [
     "pytest",
-    "pytest-anyio",
+    "pytest-asyncio",
     "pytest-cov",
     "mypy",
     "ruff",
@@ -41,8 +42,11 @@ perf = [
 ]
 
 [tool.pytest.ini_options]
-addopts = '-ra -vv --cov=grommet --cov-report=term-missing --cov-report=html'
 testpaths = ["tests/python"]
+addopts = '-ra -vv --cov=grommet --cov-report=term-missing --cov-report=html'
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+asyncio_mode = "auto"
 
 [tool.coverage.run]
 branch = true
@@ -51,12 +55,12 @@ branch = true
 exclude_also = ["if TYPE_CHECKING:"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 strict = true
-exclude = "^tests/|^scripts/"
+exclude = "^tests/|^scripts/|^benchmarks/|^examples/|^test\\.py$"
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 
 [tool.ruff.lint]
 extend-select = ["B", "I", "ASYNC"]

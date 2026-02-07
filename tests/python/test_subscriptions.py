@@ -1,7 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
-from typing import Any
 
 import pytest
 
@@ -18,41 +17,34 @@ class Query:
 @dataclass
 class Subscription:
     @gm.field
-    @staticmethod
-    async def countdown(parent: Any, info: Any, limit: int) -> AsyncIterator[int]:
+    async def countdown(self, limit: int) -> AsyncIterator[int]:
         for i in range(limit):
             yield i
 
 
-@pytest.mark.anyio
 async def test_subscription_streams_values() -> None:
-    """
-    Verifies subscriptions stream successive payloads from async iterators.
-    """
+    """Verifies subscriptions stream successive payloads from async iterators."""
     schema = gm.Schema(query=Query, subscription=Subscription)
-    stream = schema.subscribe(
+    stream = await schema.execute(
         "subscription ($limit: Int!) { countdown(limit: $limit) }",
         variables={"limit": 3},
     )
     results = []
     async for payload in stream:
-        results.append(payload["data"]["countdown"])
+        results.append(payload.data["countdown"])
 
     assert results == [0, 1, 2]
 
 
-@pytest.mark.anyio
 async def test_subscription_aclose_stops_iteration() -> None:
-    """
-    Ensures closing a subscription stops further iteration.
-    """
+    """Ensures closing a subscription stops further iteration."""
     schema = gm.Schema(query=Query, subscription=Subscription)
-    stream = schema.subscribe(
+    stream = await schema.execute(
         "subscription ($limit: Int!) { countdown(limit: $limit) }",
         variables={"limit": 5},
     )
     first = await anext(stream)
-    assert first["data"]["countdown"] == 0
+    assert first.data["countdown"] == 0
 
     await stream.aclose()
 
@@ -60,11 +52,8 @@ async def test_subscription_aclose_stops_iteration() -> None:
         await anext(stream)
 
 
-@pytest.mark.anyio
 async def test_subscription_backpressure_serializes_anext() -> None:
-    """
-    Verifies subscription backpressure serializes concurrent anext calls.
-    """
+    """Verifies subscription backpressure serializes concurrent anext calls."""
     queue: asyncio.Queue[int] = asyncio.Queue()
 
     @gm.type
@@ -76,14 +65,13 @@ async def test_subscription_backpressure_serializes_anext() -> None:
     @dataclass
     class LocalSubscription:
         @gm.field
-        @staticmethod
-        async def numbers(parent: Any, info: Any) -> AsyncIterable[int]:
+        async def numbers(self) -> AsyncIterable[int]:
             for _ in range(2):
                 value = await queue.get()
                 yield value
 
     schema = gm.Schema(query=LocalQuery, subscription=LocalSubscription)
-    stream = schema.subscribe("subscription { numbers }")
+    stream = await schema.execute("subscription { numbers }")
 
     task1 = asyncio.ensure_future(anext(stream))
     await asyncio.sleep(0)
@@ -95,20 +83,17 @@ async def test_subscription_backpressure_serializes_anext() -> None:
 
     await queue.put(10)
     first = await task1
-    assert first["data"]["numbers"] == 10
+    assert first.data["numbers"] == 10
 
     await queue.put(20)
     second = await task2
-    assert second["data"]["numbers"] == 20
+    assert second.data["numbers"] == 20
 
     await stream.aclose()
 
 
-@pytest.mark.anyio
 async def test_subscription_stream_surfaces_errors() -> None:
-    """
-    Ensures subscription stream items include GraphQL errors when iteration fails.
-    """
+    """Ensures subscription stream items include GraphQL errors when iteration fails."""
 
     @gm.type
     @dataclass
@@ -119,14 +104,13 @@ async def test_subscription_stream_surfaces_errors() -> None:
     @dataclass
     class LocalSubscription:
         @gm.field
-        @staticmethod
-        async def boom(parent: Any, info: Any) -> AsyncIterator[int]:
+        async def boom(self) -> AsyncIterator[int]:
             if False:
                 yield 1
             raise ValueError("boom")
 
     schema = gm.Schema(query=LocalQuery, subscription=LocalSubscription)
-    stream = schema.subscribe("subscription { boom }")
+    stream = await schema.execute("subscription { boom }")
     payload = await anext(stream)
-    assert payload["errors"]
+    assert payload.errors
     await stream.aclose()

@@ -1,12 +1,8 @@
 import enum
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import grommet as gm
-
-if TYPE_CHECKING:
-    from typing import Any
 
 
 @gm.scalar(
@@ -59,18 +55,15 @@ class Filter:
 @dataclass
 class Query:
     @gm.field
-    @staticmethod
-    async def node(parent: "Any", info: "Any", id: gm.ID) -> Node:
+    async def node(self, id: gm.ID) -> Node:
         raise AssertionError("resolver not called")
 
     @gm.field
-    @staticmethod
-    async def search(parent: "Any", info: "Any", filter: Filter) -> SearchResult:  # type: ignore[valid-type]
+    async def search(self, filter: Filter) -> SearchResult:  # type: ignore[valid-type]
         raise AssertionError("resolver not called")
 
     @gm.field
-    @staticmethod
-    async def today(parent: "Any", info: "Any") -> Date:
+    async def today(self) -> Date:
         raise AssertionError("resolver not called")
 
 
@@ -79,7 +72,7 @@ def test_schema_sdl_snapshot() -> None:
     Verifies generated SDL matches the stored schema snapshot.
     """
     schema = gm.Schema(query=Query)
-    sdl = schema.sdl().strip()
+    sdl = schema._core.as_sdl().strip()
 
     snapshot = Path(__file__).parent / "fixtures" / "schema_snapshot.graphql"
     expected = snapshot.read_text(encoding="utf-8").strip()

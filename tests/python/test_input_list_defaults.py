@@ -1,12 +1,6 @@
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
-
-import pytest
 
 import grommet as gm
-
-if TYPE_CHECKING:
-    from typing import Any
 
 
 @gm.input
@@ -25,12 +19,10 @@ class Payload:
 @dataclass
 class Query:
     @gm.field
-    @staticmethod
-    async def total(parent: "Any", info: "Any", payload: Payload) -> int:
+    async def total(self, payload: Payload) -> int:
         return sum(item.value for item in payload.items)
 
 
-@pytest.mark.anyio
 async def test_input_list_defaults_apply() -> None:
     """
     Verifies list input defaults are applied when omitted in variables.
@@ -41,4 +33,4 @@ async def test_input_list_defaults_apply() -> None:
         variables={"payload": {}},
     )
 
-    assert result["data"]["total"] == 1
+    assert result.data["total"] == 1

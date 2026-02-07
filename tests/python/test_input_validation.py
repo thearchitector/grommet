@@ -1,12 +1,6 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-import pytest
 
 import grommet as gm
-
-if TYPE_CHECKING:
-    from typing import Any
 
 
 @gm.input
@@ -20,8 +14,7 @@ class RequiredInput:
 @dataclass
 class RequiredQuery:
     @gm.field
-    @staticmethod
-    async def lookup(parent: "Any", info: "Any", data: RequiredInput) -> str:
+    async def lookup(self, data: RequiredInput) -> str:
         return str(data.id)
 
 
@@ -41,12 +34,10 @@ class OuterInput:
 @dataclass
 class NestedQuery:
     @gm.field
-    @staticmethod
-    async def nested(parent: "Any", info: "Any", payload: OuterInput) -> int:
+    async def nested(self, payload: OuterInput) -> int:
         return payload.inner.value
 
 
-@pytest.mark.anyio
 async def test_missing_required_input_field_reports_error() -> None:
     """
     Ensures missing required input fields yield validation errors.
@@ -57,10 +48,9 @@ async def test_missing_required_input_field_reports_error() -> None:
         variables={"data": {"name": "Ada"}},
     )
 
-    assert result["errors"], "Expected missing required field error"
+    assert result.errors, "Expected missing required field error"
 
 
-@pytest.mark.anyio
 async def test_missing_nested_required_input_field_reports_error() -> None:
     """
     Ensures missing nested required fields yield validation errors.
@@ -71,4 +61,4 @@ async def test_missing_nested_required_input_field_reports_error() -> None:
         variables={"payload": {"inner": {}}},
     )
 
-    assert result["errors"], "Expected missing nested field error"
+    assert result.errors, "Expected missing nested field error"

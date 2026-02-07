@@ -1,12 +1,6 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-import pytest
 
 import grommet as gm
-
-if TYPE_CHECKING:
-    from typing import Any
 
 
 @gm.type
@@ -17,28 +11,18 @@ class Query:
         description="Greets the caller.",
         deprecation_reason="Use helloNew",
     )
-    @staticmethod
-    async def hello(parent: "Any", info: "Any") -> str:
+    async def hello(self) -> str:
         return "hi"
 
-    @gm.field
-    @classmethod
-    async def kind(cls, info: "Any") -> str:
-        return cls.__name__
 
-
-@pytest.mark.anyio
 async def test_field_decorator_args_apply() -> None:
-    """
-    Verifies field decorator arguments affect execution and SDL output.
-    """
+    """Verifies field decorator arguments affect execution and SDL output."""
     schema = gm.Schema(query=Query)
-    result = await schema.execute("{ greet kind }")
+    result = await schema.execute("{ greet }")
 
-    assert result["data"]["greet"] == "hi"
-    assert result["data"]["kind"] == "Query"
+    assert result.data["greet"] == "hi"
 
-    sdl = schema.sdl()
+    sdl = schema._core.as_sdl()
     assert "greet" in sdl
     assert "Greets the caller." in sdl
     assert "@deprecated" in sdl

@@ -1,12 +1,7 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-import pytest
+from typing import Any
 
 import grommet as gm
-
-if TYPE_CHECKING:
-    from typing import Any
 
 
 @gm.scalar(
@@ -43,8 +38,7 @@ gm.scalar(
 @dataclass
 class Query:
     @gm.field
-    @staticmethod
-    async def echo(parent: "Any", info: "Any", when: Date) -> Date:
+    async def echo(self, when: Date) -> Date:
         assert isinstance(when, Date)
         return when
 
@@ -53,12 +47,10 @@ class Query:
 @dataclass
 class StrictQuery:
     @gm.field
-    @staticmethod
-    async def accept(parent: "Any", info: "Any", value: StrictInt) -> StrictInt:
+    async def accept(self, value: StrictInt) -> StrictInt:
         return value
 
 
-@pytest.mark.anyio
 async def test_custom_scalar_parse_and_serialize() -> None:
     """
     Verifies custom scalars parse input values and serialize responses.
@@ -68,10 +60,9 @@ async def test_custom_scalar_parse_and_serialize() -> None:
         "query ($when: Date!) { echo(when: $when) }", variables={"when": "2026-01-30"}
     )
 
-    assert result["data"]["echo"] == "2026-01-30"
+    assert result.data["echo"] == "2026-01-30"
 
 
-@pytest.mark.anyio
 async def test_custom_scalar_serializes_python_value() -> None:
     """
     Verifies custom scalars serialize Python value inputs.
@@ -82,10 +73,9 @@ async def test_custom_scalar_serializes_python_value() -> None:
         variables={"when": Date("2026-01-30")},
     )
 
-    assert result["data"]["echo"] == "2026-01-30"
+    assert result.data["echo"] == "2026-01-30"
 
 
-@pytest.mark.anyio
 async def test_custom_scalar_invalid_input_reports_error() -> None:
     """
     Ensures invalid custom scalar input values surface execution errors.
@@ -96,4 +86,4 @@ async def test_custom_scalar_invalid_input_reports_error() -> None:
         variables={"value": "nope"},
     )
 
-    assert result["errors"], "Expected strict scalar parse error"
+    assert result.errors, "Expected strict scalar parse error"
