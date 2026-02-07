@@ -78,7 +78,7 @@ print(result.data)  # {'greeting': 'Hello Mr. Gromit.'}
 Limit what fields are exposed to the schema via `grommet.Hidden`, `ClassVar`, or the standard `_private_var` syntax:
 
 ```python
-@grommet.input
+@grommet.type
 @dataclass
 class User:
     _foo: int
@@ -108,11 +108,13 @@ print(result.data)  # {'user': {'greeting': 'Hello Gromit!!!!!!'}}
 Add mutations by defining a separate mutation root type, passing `variables`:
 
 ```python
-@grommet.input
+@grommet.input(description="User input.")
 @dataclass
 class AddUserInput:
-    name: str
-    title: str | None = None
+    name: Annotated[str, grommet.Field(description="The name of the user.")]
+    title: Annotated[
+        str | None, grommet.Field(description="The title of the user, if any.")
+    ]
 
 
 @grommet.type

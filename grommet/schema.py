@@ -76,6 +76,6 @@ class Schema:
         return await self._schema.execute(query, variables, state)
 
     @cached_property
-    def sql(self) -> str:
+    def sdl(self) -> str:
         """Return the SDL for this schema."""
         return self._schema.as_sdl()
