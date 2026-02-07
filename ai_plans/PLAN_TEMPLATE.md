@@ -24,6 +24,8 @@ NEVER include these instructions in the output.
 
 # PROJECT NAME
 
+> The user's prompt should be included in this quote block word for word as reference and history.
+
 Short description of the project, outling the major objectives tackled by all the sections below.
 
 ## 1) Goal 1 [ ]

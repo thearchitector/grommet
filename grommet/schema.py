@@ -3,20 +3,20 @@ from functools import cached_property
 from typing import TYPE_CHECKING
 
 from . import _core
-from .plan import build_schema_plan
+from .plan import build_schema_graph
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from typing import Any, Protocol
 
-    from .types import RootType
-
     class OperationResult(Protocol):
-        """The result of a non-streaming operations."""
+        """
+        The result of a non-streaming operations. If there were errors during parsing,
+        validation, or execution, they will be included in the `errors` list.
+        """
 
         data: dict[str, "Any"]
         errors: list[dict[str, "Any"]] | None
-        extensions: dict[str, "Any"] | None
 
     class SubscriptionStream(Protocol):
         """
@@ -50,19 +50,19 @@ if TYPE_CHECKING:
 
 
 class Schema:
-    __slots__ = ("_core",)
+    __slots__ = ("_schema",)
 
     def __init__(
         self,
         *,
-        query: "RootType",
-        mutation: "RootType | None" = None,
-        subscription: "RootType | None" = None,
+        query: type,
+        mutation: type | None = None,
+        subscription: type | None = None,
     ) -> None:
-        plan = build_schema_plan(
+        graph = build_schema_graph(
             query=query, mutation=mutation, subscription=subscription
         )
-        self._core = _core.Schema(plan)
+        self._schema = _core.Schema(graph)
 
     async def execute(
         self, query: str, variables: dict[str, "Any"] | None = None, state: "Any" = None
@@ -73,9 +73,9 @@ class Schema:
         execution that include a parameter of type `grommet.Context[<StateCls>]`,
         available under its `state` attribute.
         """
-        return await self._core.execute(query, variables, state)
+        return await self._schema.execute(query, variables, state)
 
     @cached_property
-    def as_sdl(self) -> str:
+    def sql(self) -> str:
         """Return the SDL for this schema."""
-        return self._core.as_sdl()
+        return self._schema.as_sdl()

@@ -36,18 +36,21 @@ result = await schema.execute("{ greeting }")
 print(result.data)  # {'greeting': 'Hello world!'}
 ```
 
-Add descriptions to fields for better SDL:
+Add descriptions to types and fields for better SDL:
 
 ```python
-@grommet.type
+@grommet.type(description="All queries")
 @dataclass
 class Query:
     greeting: Annotated[str, grommet.Field(description="A simple greeting") = "Hello world!"
 
-sdl = grommet.Schema(query=Query).as_sdl()
+sdl = grommet.Schema(query=Query).sdl
 print(sdl)
+# """
+# All queries
+# """
 # query Query {
-#   """A simple greeting"""
+#   "A simple greeting"
 #   greeting: String!
 # }
 ```
@@ -70,6 +73,36 @@ print(result.data)  # {'greeting': 'Hello Gromit!'}
 
 result = await schema.execute('{ greeting(name: "Gromit", title: "Mr.") }')
 print(result.data)  # {'greeting': 'Hello Mr. Gromit.'}
+```
+
+Limit what fields are exposed to the schema via `grommet.Hidden`, `ClassVar`, or the standard `_private_var` syntax:
+
+```python
+@grommet.input
+@dataclass
+class User:
+    _foo: int
+    bar: ClassVar[int]
+    hidden: Annotated[int, grommet.Hidden]
+
+    name: str
+
+    @grommet.field
+    async def greeting(self) -> str:
+        return f"Hello {self.name}" + ("!" * self._foo * self.bar * self.hidden)
+
+
+@grommet.type
+@dataclass
+class Query:
+    @grommet.field
+    async def user(self, name: str) -> User:
+        return User(_foo=2, bar=2, hidden=2, name=name)
+
+
+schema = grommet.Schema(query=Query)
+result = await schema.execute('{ user(name: "Gromit") { greeting } }')
+print(result.data)  # {'user': {'greeting': 'Hello Gromit!!!!!!'}}
 ```
 
 Add mutations by defining a separate mutation root type, passing `variables`:
@@ -170,7 +203,7 @@ Analyze the current operation by peeking into the execution context:
 @dataclass
 class SubObject:
     @grommet.field
-    def b(self) -> str:
+    async def b(self) -> str:
         return "foo"
 
 
@@ -178,11 +211,11 @@ class SubObject:
 @dataclass
 class Object:
     @grommet.field
-    def a(self) -> int:
+    async def a(self) -> int:
         return 1
 
     @grommet.field
-    def sub(self) -> SubObject:
+    async def sub(self) -> SubObject:
         return SubObject()
 
 
