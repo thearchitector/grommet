@@ -61,6 +61,8 @@ exclude = "^tests/|^scripts/|^benchmarks/|^examples/|^test\\.py$"
 
 [tool.ruff]
 target-version = "py314"
+extend-include = ["*.md"]
+extend-exclude = ["ai_plans/"]
 
 [tool.ruff.lint]
 extend-select = ["B", "I", "ASYNC"]
@@ -68,6 +70,10 @@ extend-select = ["B", "I", "ASYNC"]
 [tool.ruff.format]
 docstring-code-format = true
 skip-magic-trailing-comma = true
+preview = true
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false
 
 [tool.maturin]
 module-name = "grommet._core"

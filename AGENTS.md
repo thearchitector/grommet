@@ -7,7 +7,7 @@
 - If the user asks you to generate a plan, generate a new markdown file in the `ai_plans` directory, prefixing it with the next sequential plan number. Always use [PLAN_TEMPLATE.md](./ai_plans/PLAN_TEMPLATE.md) when creating or updating a plan.
 
 ## Development Guidelines
-- NEVER update files that include a `pragma: no ai` comment. These are authoritative files and should be used as anchors and sources of truth when making changes. All changes MUST be compatible with whatever is in the file.
+- NEVER update files that include a `pragma: no ai` comment. These are authoritative files and should be used as anchors and sources of truth when making changes. ALWAYS validate changes against these authoritative files, executing tests against them or by extracting relevant code blocks to verify manually.
 - Mirror the established architecture, type hints, and docstring style unless explicitly told you may ignore them.
 - Update relevant docs or TODO items when behavior shifts or tasks complete.
 - ALWAYS add a timeout to commands you run to avoid waiting indefinitely.
@@ -32,15 +32,18 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Any
 
+
 # `Callable` and `Any` are only used for typing, so their imports exist only in the TYPE_CHECKING block,
 # and they are forward referenced in the function signature.
 def foo(bar: "Callable[[Any], Any]") -> None:
     pass
 
+
 # `list` is a builtin type, so no import is necessary and thus it can be used directly. `Any` is only used
 # for typing, so it is forward referenced in the function signature.
 def hello(tomato: list["Any"]) -> str | None:
     pass
+
 
 # `SomeClass` is used during runtime, so it does not need to be forward referenced.
 def world() -> SomeClass:
@@ -59,15 +62,17 @@ For example:
 ```python
 import json
 
+
 def get_user_email(payload: str) -> str:
     data = json.loads(payload)
-    return data["user"]["email"] # type: ignore[no-return-any]
+    return data["user"]["email"]  # type: ignore[no-return-any]
 ```
 
 **GOOD**:
 ```python
 import json
 from typing import cast
+
 
 def get_user_email(payload: str) -> str:
     data = json.loads(payload)
@@ -102,6 +107,7 @@ ALWAYS write docstrings for _public-facing_ functions and classes. If a function
 def fibbonaci(n: int) -> int:
     """Recursively computes the n-th Fibonacci number."""
     pass
+
 
 # This docstring is too long and will be formatted as a multi-line docstring.
 def hello(tomato: list["Any"]) -> str | None:
