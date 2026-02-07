@@ -41,8 +41,8 @@ if TYPE_CHECKING:
 
     from .metadata import GrommetMeta
 
-    class GrommetClass(Protocol):
-        __grommet_meta__: GrommetMeta
+    class GrommetClass[T: GrommetMeta](Protocol):
+        __grommet_meta__: T
 
         def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 

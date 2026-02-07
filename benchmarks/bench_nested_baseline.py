@@ -1,21 +1,18 @@
 import asyncio
 import time
-from typing import TYPE_CHECKING
 
 import strawberry
-
-if TYPE_CHECKING:
-    pass
 
 
 @strawberry.type
 class Cell:
-    _value: strawberry.Private[str]
+    j: strawberry.Private[int]
 
     @strawberry.field
-    async def value(self) -> str:
+    @staticmethod
+    async def value(parent: strawberry.Parent["Cell"]) -> str:
         await asyncio.sleep(0)
-        return self._value
+        return f"Cell {parent.j}"
 
 
 @strawberry.type
@@ -28,10 +25,7 @@ class Row:
 class Query:
     @strawberry.field
     async def rows(self) -> list[Row]:
-        return [
-            Row(a=i, cells=[Cell(_value=f"Cell {j}") for j in range(5)])
-            for i in range(100000)
-        ]
+        return [Row(a=i, cells=[Cell(j=j) for j in range(5)]) for i in range(100000)]
 
 
 async def main() -> None:

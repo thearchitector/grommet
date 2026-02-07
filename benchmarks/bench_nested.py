@@ -1,23 +1,20 @@
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import grommet as gm
-
-if TYPE_CHECKING:
-    pass
 
 
 @gm.type
 @dataclass
 class Cell:
-    _value: str
+    j: gm.Internal[int]
 
     @gm.field
-    async def value(self) -> str:
+    @staticmethod
+    async def value(parent: "Cell") -> str:
         await asyncio.sleep(0)
-        return self._value
+        return f"Cell {parent.j}"
 
 
 @gm.type
@@ -31,11 +28,9 @@ class Row:
 @dataclass
 class Query:
     @gm.field
-    async def rows(self) -> list[Row]:
-        return [
-            Row(a=i, cells=[Cell(_value=f"Cell {j}") for j in range(5)])
-            for i in range(100000)
-        ]
+    @staticmethod
+    async def rows(parent: "Query") -> list[Row]:
+        return [Row(a=i, cells=[Cell(j=j) for j in range(5)]) for i in range(100000)]
 
 
 async def main() -> None:

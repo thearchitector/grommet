@@ -1,59 +1,93 @@
-from builtins import type as pytype
+# pragma: no ai
+from functools import cached_property
 from typing import TYPE_CHECKING
 
 from . import _core
-from .errors import schema_requires_query
 from .plan import build_schema_plan
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from typing import Any, Protocol
 
-    class SubscriptionStream(Protocol):
-        def __aiter__(self) -> AsyncIterator[dict[str, Any]]: ...
+    from .decorators import GrommetClass
+    from .metadata import GrommetMeta, TypeKind
 
-        async def __anext__(self) -> dict[str, Any]: ...
+    class MetaType[T: TypeKind](GrommetMeta, Protocol):
+        kind: T
+
+    type RootType = GrommetClass[MetaType[TypeKind.OBJECT]]
+
+    class OperationResult(Protocol):
+        """The result of a non-streaming operations."""
+
+        data: dict[str, "Any"]
+        errors: list[dict[str, "Any"]] | None
+        extensions: dict[str, "Any"] | None
+
+    class SubscriptionStream(Protocol):
+        """
+        A streaming result from a subscription operation.
+
+        Use as an async iterator:
+
+        ```py
+        stream = await schema.execute("subscription { counter(limit: 3) }")
+        async for result in stream:
+            print(result.data)
+        ```
+
+        or manually:
+
+        ```py
+        stream = await schema.execute("subscription { counter(limit: 3) }")
+        result = await anext(stream)
+        print(result.data)
+        await stream.aclose()
+        ```
+
+        If you're iterating manually, remember to call `aclose` when you're done!
+        """
+
+        def __aiter__(self) -> AsyncIterator[OperationResult]: ...
+
+        async def __anext__(self) -> OperationResult: ...
 
         async def aclose(self) -> None: ...
 
+    class Context[T](Protocol):
+        state: T
+
+        def field(self, name: str) -> "Any": ...
+        def look_ahead(self) -> "Any": ...
+
 
 class Schema:
-    """Builds and executes a GraphQL schema."""
+    __slots__ = ("_core",)
 
     def __init__(
         self,
         *,
-        query: pytype,
-        mutation: pytype | None = None,
-        subscription: pytype | None = None,
+        query: "RootType",
+        mutation: "RootType | None" = None,
+        subscription: "RootType | None" = None,
     ) -> None:
-        if query is None:
-            raise schema_requires_query()
         plan = build_schema_plan(
             query=query, mutation=mutation, subscription=subscription
         )
         self._core = _core.Schema(plan)
 
     async def execute(
-        self,
-        query: str,
-        variables: dict[str, "Any"] | None = None,
-        root: "Any | None" = None,
-        context: "Any | None" = None,
-    ) -> dict[str, "Any"]:
-        return await self._core.execute(query, variables, root, context)
+        self, query: str, variables: dict[str, "Any"] | None = None, state: "Any" = None
+    ) -> "OperationResult | SubscriptionStream":
+        """
+        Execute the provided query using the given variables if present. An optional
+        state may be provided, which will be shared with all resolvers in this
+        execution that include a parameter of type `grommet.Context[<StateCls>]`,
+        available under its `state` attribute.
+        """
+        return await self._core.execute(query, variables, state)
 
-    def subscribe(
-        self,
-        query: str,
-        variables: dict[str, "Any"] | None = None,
-        root: "Any | None" = None,
-        context: "Any | None" = None,
-    ) -> "SubscriptionStream":
-        return self._core.subscribe(query, variables, root, context)
-
-    def sdl(self) -> str:
-        return self._core.sdl()
-
-    def __repr__(self) -> str:
-        return f"Schema(query={pytype(self._core).__name__})"
+    @cached_property
+    def as_sdl(self) -> str:
+        """Return the SDL for this schema."""
+        return self._core.as_sdl()

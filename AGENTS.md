@@ -7,6 +7,7 @@
 - If the user asks you to generate a plan, generate a new markdown file in the `ai_plans` directory, prefixing it with the next sequential plan number. Always use [PLAN_TEMPLATE.md](./ai_plans/PLAN_TEMPLATE.md) when creating or updating a plan.
 
 ## Development Guidelines
+- NEVER update files that include a `pragma: no ai` comment. These are authoritative files and should be used as anchors and sources of truth when making changes. All changes MUST be compatible with whatever is in the file. 
 - Mirror the established architecture, type hints, and docstring style unless explicitly told you may ignore them.
 - Update relevant docs or TODO items when behavior shifts or tasks complete.
 - ALWAYS add a timeout to commands you run to avoid waiting indefinitely.
