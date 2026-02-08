@@ -1,19 +1,9 @@
 import dataclasses
 from typing import TYPE_CHECKING
 
-from .annotations import (
-    _get_scalar_meta,
-    _is_enum_type,
-    _is_input_type,
-    _is_scalar_type,
-    analyze_annotation,
-)
-from .errors import (
-    input_mapping_expected,
-    invalid_enum_value,
-    list_type_requires_parameter,
-)
-from .metadata import ID, MISSING
+from .annotations import _is_input_type, analyze_annotation
+from .errors import input_mapping_expected, list_type_requires_parameter
+from .metadata import MISSING
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,43 +43,28 @@ def _input_field_default(
 
 
 def _arg_coercer(annotation: "Any") -> "Callable[[Any], Any] | None":
-    if annotation is object:
-        return None
-    return lambda value: _coerce_value(value, annotation)
-
-
-def _coerce_value(value: "Any", annotation: "Any") -> "Any":
-    if value is None:
-        return None
+    """Return a coercer only for input types that need dict→dataclass conversion."""
     info = analyze_annotation(annotation)
-    if info.optional:
-        return _coerce_value(value, info.inner)
     inner = info.inner
     if info.is_list:
-        if info.list_item is None:
-            raise list_type_requires_parameter()
-        return [_coerce_value(item, info.list_item) for item in value]
-    if inner is ID:
-        return str(value)
-    if _is_enum_type(inner):
-        if isinstance(value, inner):
-            return value
-        if isinstance(value, str):
-            try:
-                return inner[value]
-            except KeyError as exc:
-                raise invalid_enum_value(value, inner.__name__) from exc
-        return inner(value)
-    if _is_scalar_type(inner):
-        return _get_scalar_meta(inner).parse_value(value)
-    if inner in (str, int, float):
-        return inner(value)
-    if inner is bool:
-        return bool(value)
+        item_coercer = _arg_coercer(info.list_item) if info.list_item else None
+        if item_coercer is not None:
+            return lambda value: [item_coercer(item) for item in value]
+        return None
+    if info.optional:
+        inner_coercer = _arg_coercer(inner)
+        if inner_coercer is not None:
+            return lambda value: None if value is None else inner_coercer(value)
+        return None
     if _is_input_type(inner):
-        if isinstance(value, inner):
-            return value
-        if isinstance(value, dict):
-            return inner(**value)
-        raise input_mapping_expected(inner.__name__)
-    return value
+        return lambda value: _coerce_input(value, inner)
+    return None
+
+
+def _coerce_input(value: "Any", cls: type) -> "Any":
+    """Convert a dict to an input type dataclass instance."""
+    if isinstance(value, cls):
+        return value
+    if isinstance(value, dict):
+        return cls(**value)
+    raise input_mapping_expected(cls.__name__)

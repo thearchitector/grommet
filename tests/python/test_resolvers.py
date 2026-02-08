@@ -1,30 +1,32 @@
+"""Tests for resolver-backed fields from README examples."""
+
+import asyncio
 from dataclasses import dataclass
 
-import grommet as gm
+import grommet
 
 
-@gm.input(name="UserInput")
+@grommet.type
 @dataclass
-class CoerceUserInput:
-    id: gm.ID
-    name: str
+class Query:
+    @grommet.field(description="A simple greeting")
+    async def greeting(self, name: str, title: str | None = None) -> str:
+        return f"Hello {name}!" if not title else f"Hello, {title} {name}."
 
 
-@gm.type(name="Query")
-@dataclass
-class CoerceQuery:
-    @gm.field
-    async def label(self, user: CoerceUserInput) -> str:
-        assert isinstance(user, CoerceUserInput)
-        return f"{user.id}:{user.name}"
+def test_resolver_required_arg():
+    schema = grommet.Schema(query=Query)
+    result = asyncio.run(schema.execute('{ greeting(name: "Gromit") }'))
+    assert result.data == {"greeting": "Hello Gromit!"}
 
 
-async def test_async_resolver_coerces_input_and_id() -> None:
-    """Verifies async resolvers receive coerced input objects and ID scalars."""
-    schema = gm.Schema(query=CoerceQuery)
-    result = await schema.execute(
-        "query ($user: UserInput!) { label(user: $user) }",
-        variables={"user": {"id": 123, "name": "Ada"}},
-    )
+def test_resolver_optional_arg():
+    schema = grommet.Schema(query=Query)
+    result = asyncio.run(schema.execute('{ greeting(name: "Gromit", title: "Mr.") }'))
+    assert result.data == {"greeting": "Hello, Mr. Gromit."}
 
-    assert result.data["label"] == "123:Ada"
+
+def test_resolver_description_in_sdl():
+    schema = grommet.Schema(query=Query)
+    sdl = schema._schema.as_sdl()
+    assert "A simple greeting" in sdl

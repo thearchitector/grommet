@@ -13,7 +13,7 @@
 - ALWAYS add a timeout to commands you run to avoid waiting indefinitely.
 - ALWAYS use `uv run` for Python: Use `uv run` when running Python commands. Never run Python directly (e.g., python script.py). Always use `uv run pytest`, `uv run python script.py`, `uv run python -c "..."`, etc. This ensures the correct virtual environment and dependencies are used.
 - ALWAYS cover modifications with new or updated unit tests, run `pytest` and `cargo test`, and address any failures prior to stopping.
-- ALWAYS verify changes with `prek run -a`. Address any failures prior to stopping.
+- ALWAYS verify changes with `prek run -a`. Address any failures and warnings prior to stopping.
 
 ## Common Patterns
 

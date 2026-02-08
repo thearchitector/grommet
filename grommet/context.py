@@ -1,3 +1,4 @@
+# pragma: no ai
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 

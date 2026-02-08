@@ -22,6 +22,10 @@ repos:
     hooks:
       - id: fmt
       - id: cargo-check
+      - id: clippy
+        args:
+          - --fix
+          - --allow-dirty
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:

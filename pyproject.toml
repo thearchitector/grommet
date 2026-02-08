@@ -35,7 +35,7 @@ dev = [
     "pytest-cov",
     "mypy",
     "ruff",
-    "maturin"
+    "maturin",
 ]
 perf = [
     "strawberry-graphql",
@@ -65,7 +65,15 @@ extend-include = ["*.md"]
 extend-exclude = ["ai_plans/"]
 
 [tool.ruff.lint]
-extend-select = ["B", "I", "ASYNC"]
+extend-select = ["B", "I", "ASYNC", "TC", "SIM", "PL"]
+extend-ignore = ["UP037"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["TC"]
+
+[tool.ruff.lint.flake8-type-checking]
+strict = true
+quote-annotations = true
 
 [tool.ruff.format]
 docstring-code-format = true

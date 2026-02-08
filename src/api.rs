@@ -10,27 +10,22 @@ use pyo3::prelude::*;
 use tokio::sync::Mutex;
 
 use crate::build::build_schema;
-use crate::errors::runtime_threads_conflict;
 use crate::parse::parse_schema_plan;
 use crate::runtime::future_into_py;
-use crate::types::{PyObj, ScalarBinding, StateValue};
-use crate::values::{py_to_const_value, response_to_py};
+use crate::types::{PyObj, StateValue};
+use crate::values::{py_to_value, response_to_py};
 
 #[pyclass(module = "grommet._core", name = "Schema")]
 pub(crate) struct SchemaWrapper {
     schema: Arc<Schema>,
-    scalars: Arc<Vec<ScalarBinding>>,
 }
 
 impl SchemaWrapper {
-    fn convert_variables(
-        &self,
-        variables: Option<Py<PyAny>>,
-    ) -> PyResult<Option<async_graphql::Value>> {
+    fn convert_variables(variables: Option<Py<PyAny>>) -> PyResult<Option<async_graphql::Value>> {
         match variables {
             Some(vars) => Python::attach(|py| {
                 let bound = vars.bind(py);
-                py_to_const_value(py, &bound, self.scalars.as_ref())
+                py_to_value(py, bound)
             })
             .map(Some),
             None => Ok(None),
@@ -38,12 +33,11 @@ impl SchemaWrapper {
     }
 
     fn build_request(
-        &self,
         query: String,
         variables: Option<Py<PyAny>>,
         state: Option<Py<PyAny>>,
     ) -> PyResult<Request> {
-        let vars_value = self.convert_variables(variables)?;
+        let vars_value = Self::convert_variables(variables)?;
         let mut request = Request::new(query);
         if let Some(vars) = vars_value {
             request = request.variables(Variables::from_value(vars));
@@ -71,21 +65,10 @@ impl SchemaWrapper {
 impl SchemaWrapper {
     #[new]
     fn new(py: Python, plan: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let (schema_def, type_defs, scalar_defs, enum_defs, union_defs, resolver_map, bindings) =
-            parse_schema_plan(py, plan)?;
-        let scalar_bindings = Arc::new(bindings);
-        let schema = build_schema(
-            schema_def,
-            type_defs,
-            scalar_defs,
-            enum_defs,
-            union_defs,
-            resolver_map,
-            scalar_bindings.clone(),
-        )?;
+        let (schema_def, type_defs, resolver_map) = parse_schema_plan(py, plan)?;
+        let schema = build_schema(schema_def, type_defs, resolver_map)?;
         Ok(SchemaWrapper {
             schema: Arc::new(schema),
-            scalars: scalar_bindings,
         })
     }
 
@@ -101,7 +84,7 @@ impl SchemaWrapper {
         state: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let is_sub = Self::is_subscription(&query);
-        let request = self.build_request(query, variables, state)?;
+        let request = Self::build_request(query, variables, state)?;
         let schema = self.schema.clone();
 
         if is_sub {
@@ -166,26 +149,4 @@ impl SubscriptionStream {
             Ok(Python::attach(|py| py.None()))
         })
     }
-}
-
-#[pyfunction]
-#[pyo3(signature = (use_current_thread=false, worker_threads=None))]
-pub(crate) fn configure_runtime(
-    use_current_thread: bool,
-    worker_threads: Option<usize>,
-) -> PyResult<bool> {
-    if use_current_thread && worker_threads.is_some() {
-        return Err(runtime_threads_conflict());
-    }
-    let mut builder = if use_current_thread {
-        tokio::runtime::Builder::new_current_thread()
-    } else {
-        tokio::runtime::Builder::new_multi_thread()
-    };
-    builder.enable_all();
-    if let Some(threads) = worker_threads {
-        builder.worker_threads(threads);
-    }
-    pyo3_async_runtimes::tokio::init(builder);
-    Ok(true)
 }

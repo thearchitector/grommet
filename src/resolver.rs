@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_graphql::Error;
@@ -11,7 +10,7 @@ use pyo3_async_runtimes::tokio;
 use crate::errors::{no_parent_value, py_err_to_error, subscription_requires_async_iterator};
 use crate::lookahead::extract_lookahead;
 use crate::runtime::await_awaitable;
-use crate::types::{FieldContext, PyObj, ScalarBinding, StateValue};
+use crate::types::{FieldContext, PyObj, StateValue};
 use crate::values::{build_kwargs, py_to_field_value_for_type};
 
 pub(crate) async fn resolve_field(
@@ -23,19 +22,11 @@ pub(crate) async fn resolve_field(
         field_ctx.resolver.clone(),
         &field_ctx.arg_names,
         &field_ctx.source_name,
-        false,
     )
     .await?;
-    let field_value = Python::attach(|py| {
-        py_to_field_value_for_type(
-            py,
-            value.bind(py),
-            &field_ctx.output_type,
-            field_ctx.scalar_bindings.as_ref(),
-            field_ctx.abstract_types.as_ref(),
-        )
-    })
-    .map_err(py_err_to_error)?;
+    let field_value =
+        Python::attach(|py| py_to_field_value_for_type(py, value.bind(py), &field_ctx.output_type))
+            .map_err(py_err_to_error)?;
     Ok(Some(field_value))
 }
 
@@ -48,17 +39,11 @@ pub(crate) async fn resolve_subscription_stream<'a>(
         field_ctx.resolver.clone(),
         &field_ctx.arg_names,
         &field_ctx.source_name,
-        true,
     )
     .await?;
     let iterator =
         Python::attach(|py| subscription_iterator(value.bind(py))).map_err(py_err_to_error)?;
-    subscription_stream(
-        iterator,
-        field_ctx.scalar_bindings.clone(),
-        field_ctx.output_type.clone(),
-        field_ctx.abstract_types.clone(),
-    )
+    subscription_stream(iterator, field_ctx.output_type.clone())
 }
 
 fn subscription_iterator(value_ref: &Bound<'_, PyAny>) -> PyResult<PyObj> {
@@ -74,22 +59,14 @@ fn subscription_iterator(value_ref: &Bound<'_, PyAny>) -> PyResult<PyObj> {
 
 fn subscription_stream<'a>(
     iterator: PyObj,
-    scalar_bindings: Arc<Vec<ScalarBinding>>,
     output_type: TypeRef,
-    abstract_types: Arc<HashSet<String>>,
 ) -> Result<BoxStream<'a, Result<FieldValue<'a>, Error>>, Error> {
     let stream =
         Python::attach(|py| tokio::into_stream_v1(iterator.bind(py))).map_err(py_err_to_error)?;
     let stream = stream.map(move |item| match item {
         Ok(value) => {
             let value = match Python::attach(|py| {
-                py_to_field_value_for_type(
-                    py,
-                    value.bind(py),
-                    &output_type,
-                    scalar_bindings.as_ref(),
-                    abstract_types.as_ref(),
-                )
+                py_to_field_value_for_type(py, value.bind(py), &output_type)
             }) {
                 Ok(value) => value,
                 Err(err) => return Err(py_err_to_error(err)),
@@ -108,13 +85,11 @@ async fn resolve_value(
     resolver: Option<PyObj>,
     arg_names: &[String],
     source_name: &str,
-    is_subscription: bool,
 ) -> Result<Py<PyAny>, Error> {
     let (state, parent) = extract_state(&ctx);
 
-    let has_resolver = resolver.is_some();
-    let value = if let Some(resolver) = resolver {
-        Python::attach(|py| {
+    if let Some(resolver) = resolver {
+        let coroutine = Python::attach(|py| {
             call_resolver(
                 py,
                 &ctx,
@@ -124,35 +99,12 @@ async fn resolve_value(
                 state.as_ref(),
             )
         })
-        .map_err(py_err_to_error)?
+        .map_err(py_err_to_error)?;
+        await_awaitable(coroutine).await
     } else {
         let parent = parent.ok_or_else(no_parent_value)?;
-        Python::attach(|py| resolve_from_parent(py, &parent, source_name))
-            .map_err(py_err_to_error)?
-    };
-
-    if !has_resolver {
-        return Ok(value);
+        Python::attach(|py| resolve_from_parent(py, &parent, source_name)).map_err(py_err_to_error)
     }
-
-    if is_subscription {
-        let (is_async_iter, is_awaitable) = Python::attach(|py| {
-            let bound = value.bind(py);
-            let is_async_iter = bound.hasattr("__aiter__")? || bound.hasattr("__anext__")?;
-            let is_awaitable = bound.hasattr("__await__")?;
-            Ok((is_async_iter, is_awaitable))
-        })
-        .map_err(py_err_to_error)?;
-        if is_async_iter {
-            return Ok(value);
-        }
-        if is_awaitable {
-            return await_value(value).await;
-        }
-        return Ok(value);
-    }
-
-    await_value(value).await
 }
 
 fn extract_state(ctx: &ResolverContext<'_>) -> (Option<PyObj>, Option<PyObj>) {
@@ -201,21 +153,9 @@ fn call_resolver(
 
 fn resolve_from_parent(py: Python<'_>, parent: &PyObj, source_name: &str) -> PyResult<Py<PyAny>> {
     let parent_ref = parent.bind(py);
-    let value = if let Ok(dict) = parent_ref.cast::<PyDict>() {
-        match dict.get_item(source_name)? {
-            Some(item) => item.unbind(),
-            None => py.None(),
-        }
-    } else if parent_ref.hasattr(source_name)? {
-        parent_ref.getattr(source_name)?.unbind()
-    } else if parent_ref.hasattr("__getitem__")? {
-        parent_ref.get_item(source_name)?.unbind()
+    if parent_ref.hasattr(source_name)? {
+        Ok(parent_ref.getattr(source_name)?.unbind())
     } else {
-        py.None()
-    };
-    Ok(value)
-}
-
-async fn await_value(value: Py<PyAny>) -> Result<Py<PyAny>, Error> {
-    await_awaitable(value).await
+        Ok(py.None())
+    }
 }

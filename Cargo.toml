@@ -5,6 +5,7 @@ edition = "2024"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+unsafe_code = "forbid"
 
 [lib]
 name = "grommet"
@@ -15,8 +16,8 @@ name = "rust"
 path = "tests/test_core.rs"
 
 [dependencies]
-async-graphql = "7.2.1"
+async-graphql = { version = "7.2.1", default-features = false, features = ["dynamic-schema"] }
 indexmap = "2"
 pyo3 = "0.28.0"
 pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime", "unstable-streams"] }
-tokio = { version = "1.49", features = ["rt-multi-thread", "sync", "macros"] }
+tokio = { version = "1.49", features = ["sync"] }

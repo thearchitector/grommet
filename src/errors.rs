@@ -26,14 +26,6 @@ pub(crate) fn expected_list_value() -> PyErr {
     py_type_error("Expected list for GraphQL list type")
 }
 
-pub(crate) fn abstract_type_requires_object() -> PyErr {
-    py_type_error("Abstract types must return @grommet.type objects")
-}
-
 pub(crate) fn unsupported_value_type() -> PyErr {
     py_type_error("Unsupported value type")
-}
-
-pub(crate) fn runtime_threads_conflict() -> PyErr {
-    py_value_error("worker_threads cannot be set for a current-thread runtime")
 }

@@ -1,15 +1,11 @@
-use std::collections::HashSet;
-
-use async_graphql::dynamic::{FieldValue, ResolverContext, TypeRef, ValueAccessor};
+use async_graphql::dynamic::{FieldValue, ResolverContext, TypeRef};
 use async_graphql::{Name, Value};
 use pyo3::IntoPyObject;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyBytes, PyDict, PyList, PyTuple};
 
-use crate::errors::{
-    abstract_type_requires_object, expected_list_value, py_value_error, unsupported_value_type,
-};
-use crate::types::{PyObj, ScalarBinding};
+use crate::errors::{expected_list_value, py_value_error, unsupported_value_type};
+use crate::types::PyObj;
 
 #[pyclass(module = "grommet._core", name = "OperationResult")]
 pub(crate) struct OperationResult {
@@ -55,103 +51,18 @@ pub(crate) fn build_kwargs<'py>(
     for name in arg_names {
         let value = ctx.args.try_get(name.as_str());
         if let Ok(value) = value {
-            let value = value_accessor_to_value(&value);
-            let py_value = value_to_py(py, &value)?;
+            let py_value = value_to_py(py, value.as_value())?;
             kwargs.set_item(name, py_value)?;
         }
     }
     Ok(kwargs)
 }
 
-fn value_accessor_to_value(value: &ValueAccessor<'_>) -> Value {
-    value.as_value().clone()
-}
-
-pub(crate) fn pyobj_to_value(value: &PyObj, scalar_bindings: &[ScalarBinding]) -> PyResult<Value> {
+pub(crate) fn pyobj_to_value(value: &PyObj) -> PyResult<Value> {
     Python::attach(|py| {
         let bound = value.bind(py);
-        py_to_value(py, &bound, scalar_bindings, true)
+        py_to_value(py, &bound)
     })
-}
-
-pub(crate) fn py_to_const_value(
-    py: Python<'_>,
-    value: &Bound<'_, PyAny>,
-    scalar_bindings: &[ScalarBinding],
-) -> PyResult<Value> {
-    py_to_value(py, value, scalar_bindings, true)
-}
-
-fn scalar_binding_for_value<'a>(
-    py: Python<'_>,
-    value: &Bound<'_, PyAny>,
-    scalar_bindings: &'a [ScalarBinding],
-) -> PyResult<Option<&'a ScalarBinding>> {
-    // Short-circuit for built-in types that are never custom scalars
-    if is_builtin_type(value) {
-        return Ok(None);
-    }
-    for binding in scalar_bindings {
-        let py_type = binding.py_type.bind(py);
-        let is_instance = value.is_instance(&py_type)?;
-        if is_instance {
-            return Ok(Some(binding));
-        }
-    }
-    Ok(None)
-}
-
-#[inline]
-fn is_builtin_type(value: &Bound<'_, PyAny>) -> bool {
-    value.is_none()
-        || value.is_instance_of::<pyo3::types::PyBool>()
-        || value.is_instance_of::<pyo3::types::PyInt>()
-        || value.is_instance_of::<pyo3::types::PyFloat>()
-        || value.is_instance_of::<pyo3::types::PyString>()
-        || value.is_instance_of::<PyList>()
-        || value.is_instance_of::<PyTuple>()
-        || value.is_instance_of::<PyDict>()
-}
-
-fn meta_type_value(ty: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
-    if !ty.hasattr("__grommet_meta__")? {
-        return Ok(None);
-    }
-    let meta = ty.getattr("__grommet_meta__")?;
-    if !meta.hasattr("type")? {
-        return Ok(None);
-    }
-    let meta_type = meta.getattr("type")?;
-    if meta_type.hasattr("value")? {
-        Ok(Some(meta_type.getattr("value")?.extract()?))
-    } else {
-        Ok(Some(meta_type.extract()?))
-    }
-}
-
-fn grommet_type_name(_py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
-    let ty = value.get_type();
-    let Some(meta_type) = meta_type_value(&ty)? else {
-        return Ok(None);
-    };
-    if meta_type != "type" {
-        return Ok(None);
-    }
-    let meta = ty.getattr("__grommet_meta__")?;
-    let name: String = meta.getattr("name")?.extract()?;
-    Ok(Some(name))
-}
-
-fn enum_name_for_value(_py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
-    let ty = value.get_type();
-    let Some(meta_type) = meta_type_value(&ty)? else {
-        return Ok(None);
-    };
-    if meta_type != "enum" {
-        return Ok(None);
-    }
-    let name: String = value.getattr("name")?.extract()?;
-    Ok(Some(name))
 }
 
 fn input_object_as_dict<'py>(
@@ -159,10 +70,16 @@ fn input_object_as_dict<'py>(
     value: &Bound<'py, PyAny>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
     let ty = value.get_type();
-    let Some(meta_type) = meta_type_value(&ty)? else {
+    if !ty.hasattr("__grommet_meta__")? {
         return Ok(None);
-    };
-    if meta_type != "input" {
+    }
+    let meta = ty.getattr("__grommet_meta__")?;
+    if !meta.hasattr("kind")? {
+        return Ok(None);
+    }
+    let kind = meta.getattr("kind")?;
+    let kind_value: String = kind.getattr("value")?.extract()?;
+    if kind_value != "input" {
         return Ok(None);
     }
     let dataclasses = py.import("dataclasses")?;
@@ -174,46 +91,18 @@ pub(crate) fn py_to_field_value_for_type(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
     output_type: &TypeRef,
-    scalar_bindings: &[ScalarBinding],
-    abstract_types: &HashSet<String>,
 ) -> PyResult<FieldValue<'static>> {
     if value.is_none() {
         return Ok(FieldValue::value(Value::Null));
     }
     match output_type {
-        TypeRef::NonNull(inner) => {
-            py_to_field_value_for_type(py, value, inner, scalar_bindings, abstract_types)
-        }
-        TypeRef::List(inner) => {
-            convert_sequence_to_field_values(py, value, inner, scalar_bindings, abstract_types)
-        }
-        TypeRef::Named(name) => {
-            if abstract_types.contains(name.as_ref()) {
-                let type_name =
-                    grommet_type_name(py, value)?.ok_or_else(|| abstract_type_requires_object())?;
-                let inner = FieldValue::owned_any(PyObj::new(value.clone().unbind()));
-                Ok(inner.with_type(type_name))
-            } else {
-                py_to_field_value(py, value, scalar_bindings)
-            }
-        }
+        TypeRef::NonNull(inner) => py_to_field_value_for_type(py, value, inner),
+        TypeRef::List(inner) => convert_sequence_to_field_values(py, value, inner),
+        TypeRef::Named(_name) => py_to_field_value(py, value),
     }
 }
 
-fn py_to_field_value(
-    py: Python<'_>,
-    value: &Bound<'_, PyAny>,
-    scalar_bindings: &[ScalarBinding],
-) -> PyResult<FieldValue<'static>> {
-    if let Some(binding) = scalar_binding_for_value(py, value, scalar_bindings)? {
-        let serialized = binding.serialize.clone_ref(py).call1(py, (value,))?;
-        let serialized = serialized.bind(py);
-        let value = py_to_value(py, &serialized, scalar_bindings, false)?;
-        return Ok(FieldValue::value(value));
-    }
-    if let Some(name) = enum_name_for_value(py, value)? {
-        return Ok(FieldValue::value(Value::Enum(Name::new(name))));
-    }
+fn py_to_field_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<FieldValue<'static>> {
     if value.is_none() {
         return Ok(FieldValue::value(Value::Null));
     }
@@ -230,7 +119,7 @@ fn py_to_field_value(
         return Ok(FieldValue::value(Value::String(s)));
     }
     if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
-        return convert_sequence_to_field_values_untyped(py, value, scalar_bindings);
+        return convert_sequence_to_field_values_untyped(py, value);
     }
     Ok(FieldValue::owned_any(PyObj::new(value.clone().unbind())))
 }
@@ -260,11 +149,9 @@ fn convert_sequence_to_field_values(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
     inner_type: &TypeRef,
-    scalar_bindings: &[ScalarBinding],
-    abstract_types: &HashSet<String>,
 ) -> PyResult<FieldValue<'static>> {
     let items = collect_sequence(value, |item| {
-        py_to_field_value_for_type(py, item, inner_type, scalar_bindings, abstract_types)
+        py_to_field_value_for_type(py, item, inner_type)
     })?;
     Ok(FieldValue::list(items))
 }
@@ -272,30 +159,14 @@ fn convert_sequence_to_field_values(
 fn convert_sequence_to_field_values_untyped(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
-    scalar_bindings: &[ScalarBinding],
 ) -> PyResult<FieldValue<'static>> {
-    let items = collect_sequence(value, |item| py_to_field_value(py, item, scalar_bindings))?;
+    let items = collect_sequence(value, |item| py_to_field_value(py, item))?;
     Ok(FieldValue::list(items))
 }
 
-pub(crate) fn py_to_value(
-    py: Python<'_>,
-    value: &Bound<'_, PyAny>,
-    scalar_bindings: &[ScalarBinding],
-    allow_scalar: bool,
-) -> PyResult<Value> {
-    if allow_scalar {
-        if let Some(binding) = scalar_binding_for_value(py, value, scalar_bindings)? {
-            let serialized = binding.serialize.clone_ref(py).call1(py, (value,))?;
-            let serialized = serialized.bind(py);
-            return py_to_value(py, &serialized, scalar_bindings, false);
-        }
-    }
-    if let Some(name) = enum_name_for_value(py, value)? {
-        return Ok(Value::Enum(Name::new(name)));
-    }
+pub(crate) fn py_to_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Some(dict_obj) = input_object_as_dict(py, value)? {
-        return py_to_value(py, &dict_obj, scalar_bindings, allow_scalar);
+        return py_to_value(py, &dict_obj);
     }
     if value.is_none() {
         return Ok(Value::Null);
@@ -316,17 +187,14 @@ pub(crate) fn py_to_value(
         return Ok(Value::Binary(bytes.as_bytes().to_vec().into()));
     }
     if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
-        let items = collect_sequence(value, |item| py_to_value(py, item, scalar_bindings, true))?;
+        let items = collect_sequence(value, |item| py_to_value(py, item))?;
         return Ok(Value::List(items));
     }
     if let Ok(dict) = value.cast::<PyDict>() {
         let mut map = indexmap::IndexMap::new();
         for (key, value) in dict.iter() {
             let key: String = key.extract()?;
-            map.insert(
-                Name::new(key),
-                py_to_value(py, &value, scalar_bindings, true)?,
-            );
+            map.insert(Name::new(key), py_to_value(py, &value)?);
         }
         return Ok(Value::Object(map));
     }

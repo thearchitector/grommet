@@ -32,24 +32,6 @@ pub(crate) struct SchemaDef {
     pub(crate) subscription: Option<String>,
 }
 
-pub(crate) struct ScalarDef {
-    pub(crate) name: String,
-    pub(crate) description: Option<String>,
-    pub(crate) specified_by_url: Option<String>,
-}
-
-pub(crate) struct EnumDef {
-    pub(crate) name: String,
-    pub(crate) description: Option<String>,
-    pub(crate) values: Vec<String>,
-}
-
-pub(crate) struct UnionDef {
-    pub(crate) name: String,
-    pub(crate) description: Option<String>,
-    pub(crate) types: Vec<String>,
-}
-
 pub(crate) struct ArgDef {
     pub(crate) name: String,
     pub(crate) type_ref: TypeRef,
@@ -70,7 +52,6 @@ pub(crate) struct FieldDef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TypeKind {
     Object,
-    Interface,
     Subscription,
     Input,
 }
@@ -79,7 +60,6 @@ impl TypeKind {
     pub(crate) fn from_str(s: &str) -> PyResult<Self> {
         match s {
             "object" => Ok(TypeKind::Object),
-            "interface" => Ok(TypeKind::Interface),
             "subscription" => Ok(TypeKind::Subscription),
             "input" => Ok(TypeKind::Input),
             _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -94,17 +74,7 @@ pub(crate) struct TypeDef {
     pub(crate) name: String,
     pub(crate) fields: Vec<FieldDef>,
     pub(crate) description: Option<String>,
-    pub(crate) implements: Vec<String>,
 }
-
-#[derive(Clone)]
-pub(crate) struct ScalarBinding {
-    pub(crate) _name: String,
-    pub(crate) py_type: PyObj,
-    pub(crate) serialize: PyObj,
-}
-
-use std::collections::HashSet;
 
 use async_graphql::dynamic::TypeRef;
 
@@ -114,6 +84,4 @@ pub(crate) struct FieldContext {
     pub(crate) arg_names: Vec<String>,
     pub(crate) source_name: String,
     pub(crate) output_type: TypeRef,
-    pub(crate) scalar_bindings: Arc<Vec<ScalarBinding>>,
-    pub(crate) abstract_types: Arc<HashSet<String>>,
 }

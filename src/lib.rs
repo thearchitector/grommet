@@ -12,7 +12,7 @@ mod values;
 
 use pyo3::prelude::*;
 
-use crate::api::{SchemaWrapper, SubscriptionStream, configure_runtime};
+use crate::api::{SchemaWrapper, SubscriptionStream};
 use crate::lookahead::Lookahead;
 use crate::values::OperationResult;
 
@@ -24,6 +24,5 @@ pub fn _core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<SubscriptionStream>()?;
     module.add_class::<OperationResult>()?;
     module.add_class::<Lookahead>()?;
-    module.add_function(wrap_pyfunction!(configure_runtime, module)?)?;
     Ok(())
 }
