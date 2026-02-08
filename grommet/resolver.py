@@ -17,7 +17,7 @@ _MIN_CONTEXT_PARAMS = 2
 class ResolverInfo:
     """Resolver metadata for Rust-side dispatch. Not a wrapper — holds the raw function."""
 
-    __slots__ = ("func", "shape", "arg_coercers", "is_async_gen")
+    __slots__ = ("func", "shape", "arg_coercers", "is_async_gen", "is_async")
 
     def __init__(
         self,
@@ -26,11 +26,13 @@ class ResolverInfo:
         arg_coercers: list[tuple[str, "Callable[[Any], Any] | None"]],
         *,
         is_async_gen: bool = False,
+        is_async: bool = True,
     ) -> None:
         self.func = func
         self.shape = shape
         self.arg_coercers = arg_coercers
         self.is_async_gen = is_async_gen
+        self.is_async = is_async
 
 
 def _resolver_params(resolver: "Callable[..., Any]") -> list[inspect.Parameter]:
@@ -112,5 +114,9 @@ def _analyze_resolver(
         shape = "self_only"
 
     return ResolverInfo(
-        func=resolver, shape=shape, arg_coercers=arg_coercers, is_async_gen=is_asyncgen
+        func=resolver,
+        shape=shape,
+        arg_coercers=arg_coercers,
+        is_async_gen=is_asyncgen,
+        is_async=is_coroutine or is_asyncgen,
     )

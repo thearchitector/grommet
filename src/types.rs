@@ -106,6 +106,7 @@ pub(crate) struct ResolverEntry {
     pub(crate) shape: ResolverShape,
     pub(crate) arg_coercers: Vec<(String, Option<PyObj>)>,
     pub(crate) is_async_gen: bool,
+    pub(crate) is_async: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -122,7 +123,7 @@ pub(crate) enum ScalarHint {
 #[derive(Clone)]
 pub(crate) struct FieldContext {
     pub(crate) resolver: Option<ResolverEntry>,
-    pub(crate) source_name: String,
+    pub(crate) source_name_py: std::sync::Arc<Py<pyo3::types::PyString>>,
     pub(crate) output_type: TypeRef,
     pub(crate) context_cls: Option<PyObj>,
     pub(crate) scalar_hint: ScalarHint,

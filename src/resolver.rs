@@ -1,3 +1,5 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_graphql::Error;
@@ -9,15 +11,39 @@ use pyo3_async_runtimes::tokio;
 
 use crate::errors::{no_parent_value, py_err_to_error, subscription_requires_async_iterator};
 use crate::lookahead::extract_lookahead;
-use crate::runtime::into_future;
 use crate::types::{FieldContext, PyObj, ResolverEntry, ResolverShape, ScalarHint, StateValue};
 use crate::values::{py_to_field_value_for_type, value_to_py};
 
+type BoxFut = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
+
+// Synchronous field resolution for non-resolver fields (parent attribute access).
+// Single GIL block: getattr + convert. No async overhead, no task scheduling.
+pub(crate) fn resolve_field_sync<'a>(
+    ctx: &ResolverContext<'a>,
+    field_ctx: &FieldContext,
+) -> Result<FieldValue<'a>, Error> {
+    let parent = ctx
+        .parent_value
+        .try_downcast_ref::<PyObj>()
+        .ok()
+        .ok_or_else(no_parent_value)?;
+    Python::attach(|py| {
+        let raw = match parent.bind(py).getattr(&*field_ctx.source_name_py) {
+            Ok(val) => val,
+            Err(_) => py.None().into_bound(py),
+        };
+        py_to_field_value_for_type(py, &raw, &field_ctx.output_type, field_ctx.scalar_hint)
+    })
+    .map_err(py_err_to_error)
+}
+
+// Async field resolution for fields with resolvers.
 pub(crate) async fn resolve_field(
     ctx: ResolverContext<'_>,
     field_ctx: Arc<FieldContext>,
 ) -> Result<Option<FieldValue<'_>>, Error> {
-    let value = resolve_value(&ctx, &field_ctx).await?;
+    let entry = field_ctx.resolver.as_ref().expect("resolver missing");
+    let value = resolve_with_resolver(&ctx, &field_ctx, entry).await?;
     let hint = field_ctx.scalar_hint;
     let field_value = Python::attach(|py| {
         py_to_field_value_for_type(py, value.bind(py), &field_ctx.output_type, hint)
@@ -30,7 +56,8 @@ pub(crate) async fn resolve_subscription_stream<'a>(
     ctx: ResolverContext<'a>,
     field_ctx: Arc<FieldContext>,
 ) -> Result<BoxStream<'a, Result<FieldValue<'a>, Error>>, Error> {
-    let value = resolve_value(&ctx, &field_ctx).await?;
+    let entry = field_ctx.resolver.as_ref().expect("resolver missing");
+    let value = resolve_with_resolver(&ctx, &field_ctx, entry).await?;
     let iterator =
         Python::attach(|py| subscription_iterator(value.bind(py))).map_err(py_err_to_error)?;
     subscription_stream(
@@ -75,35 +102,50 @@ fn subscription_stream<'a>(
     Ok(stream.boxed())
 }
 
-async fn resolve_value(
+// Resolve a field that has a resolver entry.
+// Merges call_resolver + into_future into a single GIL block for async resolvers.
+// Sync resolvers skip into_future entirely.
+async fn resolve_with_resolver(
     ctx: &ResolverContext<'_>,
     field_ctx: &FieldContext,
+    entry: &ResolverEntry,
 ) -> Result<Py<PyAny>, Error> {
-    let (state, parent) = extract_state(ctx);
+    // Lazy state extraction: only look up state when the resolver needs context
+    let needs_state = matches!(
+        entry.shape,
+        ResolverShape::SelfAndContext | ResolverShape::SelfContextAndArgs
+    );
+    let state = if needs_state {
+        ctx.data::<StateValue>().ok().map(|s| s.0.clone())
+    } else {
+        None
+    };
+    let parent = ctx.parent_value.try_downcast_ref::<PyObj>().ok().cloned();
 
-    if let Some(entry) = &field_ctx.resolver {
-        let result = Python::attach(|py| {
+    if entry.is_async_gen {
+        // Async generators (subscriptions): call resolver, return generator directly
+        Python::attach(|py| {
             call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())
         })
+        .map_err(py_err_to_error)
+    } else if entry.is_async {
+        // Async coroutine: call resolver + set up future in one GIL block
+        let future: BoxFut = Python::attach(|py| {
+            let coroutine =
+                call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())?;
+            let bound = coroutine.into_bound(py);
+            let fut = tokio::into_future(bound)?;
+            Ok(Box::pin(fut) as BoxFut)
+        })
         .map_err(py_err_to_error)?;
-        // Async generators (subscriptions) return directly; coroutines must be awaited
-        if entry.is_async_gen {
-            Ok(result)
-        } else {
-            let future = into_future(result).map_err(py_err_to_error)?;
-            future.await.map_err(py_err_to_error)
-        }
+        future.await.map_err(py_err_to_error)
     } else {
-        let parent = parent.ok_or_else(no_parent_value)?;
-        Python::attach(|py| resolve_from_parent(py, &parent, &field_ctx.source_name))
-            .map_err(py_err_to_error)
+        // Sync resolver: call resolver, return result directly (no into_future)
+        Python::attach(|py| {
+            call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())
+        })
+        .map_err(py_err_to_error)
     }
-}
-
-fn extract_state(ctx: &ResolverContext<'_>) -> (Option<PyObj>, Option<PyObj>) {
-    let state = ctx.data::<StateValue>().ok().map(|s| s.0.clone());
-    let parent = ctx.parent_value.try_downcast_ref::<PyObj>().ok().cloned();
-    (state, parent)
 }
 
 fn build_context_obj(
@@ -175,12 +217,5 @@ fn call_resolver(
             let kwargs = build_kwargs_with_coercion(py, ctx, &entry.arg_coercers)?;
             Ok(func.call((parent_obj, ctx_obj), Some(&kwargs))?.unbind())
         }
-    }
-}
-
-fn resolve_from_parent(py: Python<'_>, parent: &PyObj, source_name: &str) -> PyResult<Py<PyAny>> {
-    match parent.bind(py).getattr(source_name) {
-        Ok(val) => Ok(val.unbind()),
-        Err(_) => Ok(py.None()),
     }
 }

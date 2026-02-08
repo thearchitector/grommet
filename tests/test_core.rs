@@ -435,9 +435,9 @@ mod resolver {
     mod tests {
         use super::*;
 
-        /// Verifies resolve_from_parent reads attributes and returns None for missing.
+        /// Verifies interned-string getattr reads attributes and falls back to None.
         #[test]
-        fn resolve_from_parent_covers_sources() {
+        fn interned_getattr_covers_sources() {
             crate::with_py(|py| {
                 let locals = PyDict::new(py);
                 py.run(
@@ -455,15 +455,16 @@ empty = Obj.__new__(type('Empty', (), {}))
                 )
                 .unwrap();
 
-                let obj = locals.get_item("obj").unwrap().unwrap().unbind();
-                let parent = PyObj::new(obj);
-                let value = resolve_from_parent(py, &parent, "attr").unwrap();
-                assert_eq!(value.bind(py).extract::<i64>().unwrap(), 4);
+                let attr_name = pyo3::types::PyString::new(py, "attr").unbind();
+                let missing_name = pyo3::types::PyString::new(py, "missing").unbind();
 
-                let empty = locals.get_item("empty").unwrap().unwrap().unbind();
-                let parent = PyObj::new(empty);
-                let value = resolve_from_parent(py, &parent, "missing").unwrap();
-                assert!(value.bind(py).is_none());
+                let obj = locals.get_item("obj").unwrap().unwrap();
+                let value = obj.getattr(&attr_name).unwrap();
+                assert_eq!(value.extract::<i64>().unwrap(), 4);
+
+                let empty = locals.get_item("empty").unwrap().unwrap();
+                let result = empty.getattr(&missing_name);
+                assert!(result.is_err());
             });
         }
 
@@ -524,7 +525,7 @@ from grommet.resolver import ResolverInfo
 async def resolver(self):
     return 1
 
-info = ResolverInfo(func=resolver, shape="self_only", arg_coercers=[], is_async_gen=False)
+info = ResolverInfo(func=resolver, shape="self_only", arg_coercers=[], is_async_gen=False, is_async=True)
 
 plan = SchemaPlan(
     query="Query", mutation=None, subscription=None,

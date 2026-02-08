@@ -43,6 +43,7 @@ fn parse_resolver_entry(_py: Python<'_>, entry: &Bound<'_, PyAny>) -> PyResult<R
     let shape_str: String = entry.getattr("shape")?.extract()?;
     let shape = ResolverShape::from_str(&shape_str)?;
     let is_async_gen: bool = entry.getattr("is_async_gen")?.extract()?;
+    let is_async: bool = entry.getattr("is_async")?.extract()?;
 
     let coercers_list: Vec<Py<PyAny>> = entry.getattr("arg_coercers")?.extract()?;
     let mut arg_coercers = Vec::with_capacity(coercers_list.len());
@@ -63,6 +64,7 @@ fn parse_resolver_entry(_py: Python<'_>, entry: &Bound<'_, PyAny>) -> PyResult<R
         shape,
         arg_coercers,
         is_async_gen,
+        is_async,
     })
 }
 
