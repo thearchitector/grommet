@@ -69,7 +69,7 @@ extend-select = ["B", "I", "ASYNC", "TC", "SIM", "PL"]
 extend-ignore = ["UP037"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["TC"]
+"{tests,benchmarks}/**" = ["TC", "F811"]
 
 [tool.ruff.lint.flake8-type-checking]
 strict = true
