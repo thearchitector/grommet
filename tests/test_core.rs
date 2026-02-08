@@ -266,24 +266,32 @@ Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
                 let list_ref = TypeRef::List(Box::new(TypeRef::named("String")));
                 let list = PyList::new(py, ["a", "b"]).unwrap();
                 let list_any = list.into_any();
-                let _ = py_to_field_value_for_type(py, &list_any, &list_ref).unwrap();
+                let _ = py_to_field_value_for_type(py, &list_any, &list_ref, ScalarHint::Unknown)
+                    .unwrap();
                 let tuple_any = ("a", "b").into_pyobject(py).unwrap().into_any();
-                let _ = py_to_field_value_for_type(py, &tuple_any, &list_ref).unwrap();
+                let _ = py_to_field_value_for_type(py, &tuple_any, &list_ref, ScalarHint::Unknown)
+                    .unwrap();
 
                 let int_any = PyInt::new(py, 42).into_any();
-                let err = py_to_field_value_for_type(py, &int_any, &list_ref)
+                let err = py_to_field_value_for_type(py, &int_any, &list_ref, ScalarHint::Unknown)
                     .expect_err("expected list error");
                 let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
                 assert_eq!(msg, "Expected list for GraphQL list type");
 
                 let non_null = TypeRef::NonNull(Box::new(TypeRef::named("String")));
                 let ok_any = "ok".into_pyobject(py).unwrap().into_any();
-                let _ = py_to_field_value_for_type(py, &ok_any, &non_null).unwrap();
+                let _ = py_to_field_value_for_type(py, &ok_any, &non_null, ScalarHint::Unknown)
+                    .unwrap();
 
                 let none_obj = py.None();
                 let none_any = none_obj.bind(py);
-                let _ =
-                    py_to_field_value_for_type(py, &none_any, &TypeRef::named("String")).unwrap();
+                let _ = py_to_field_value_for_type(
+                    py,
+                    &none_any,
+                    &TypeRef::named("String"),
+                    ScalarHint::Unknown,
+                )
+                .unwrap();
             });
         }
 
@@ -367,13 +375,20 @@ Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
 
                 // Test list conversion with type
                 let list = PyList::new(py, ["a", "b"]).unwrap();
-                let result =
-                    convert_sequence_to_field_values(py, &list.into_any(), &inner_type).unwrap();
+                let result = convert_sequence_to_field_values(
+                    py,
+                    &list.into_any(),
+                    &inner_type,
+                    ScalarHint::Unknown,
+                )
+                .unwrap();
                 let _ = result;
 
                 // Test tuple conversion with type
                 let tuple = ("x", "y").into_pyobject(py).unwrap().into_any();
-                let result = convert_sequence_to_field_values(py, &tuple, &inner_type).unwrap();
+                let result =
+                    convert_sequence_to_field_values(py, &tuple, &inner_type, ScalarHint::Unknown)
+                        .unwrap();
                 let _ = result;
 
                 // Test untyped list conversion
@@ -389,8 +404,13 @@ Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
 
                 // Test error case: non-sequence passed to typed converter
                 let int_obj = PyInt::new(py, 42).into_any();
-                let err = convert_sequence_to_field_values(py, &int_obj, &inner_type)
-                    .expect_err("should error for non-list");
+                let err = convert_sequence_to_field_values(
+                    py,
+                    &int_obj,
+                    &inner_type,
+                    ScalarHint::Unknown,
+                )
+                .expect_err("should error for non-list");
                 let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
                 assert_eq!(msg, "Expected list for GraphQL list type");
 
@@ -414,7 +434,6 @@ mod resolver {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use pyo3::exceptions::PyRuntimeError;
 
         /// Verifies resolve_from_parent reads attributes and returns None for missing.
         #[test]
@@ -448,9 +467,9 @@ empty = Obj.__new__(type('Empty', (), {}))
             });
         }
 
-        /// Ensures await_awaitable resolves Python awaitables into concrete values.
+        /// Ensures into_future resolves Python awaitables into concrete values.
         #[test]
-        fn await_awaitable_waits_for_future() {
+        fn into_future_waits_for_coroutine() {
             let awaitable = crate::with_py(|py| {
                 let locals = PyDict::new(py);
                 py.run(
@@ -470,9 +489,8 @@ async def coro():
             });
             let awaited = crate::with_py(|py| {
                 pyo3_async_runtimes::tokio::run(py, async move {
-                    await_awaitable(awaitable)
-                        .await
-                        .map_err(|err| PyRuntimeError::new_err(err.message))
+                    let future = crate::runtime::into_future(awaitable)?;
+                    future.await
                 })
             })
             .unwrap();
@@ -501,8 +519,12 @@ mod parse {
 from grommet.plan import SchemaPlan, TypePlan, FieldPlan, ArgPlan
 from grommet.metadata import TypeKind, TypeSpec
 
-async def resolver(parent, ctx):
+from grommet.resolver import ResolverInfo
+
+async def resolver(self):
     return 1
+
+info = ResolverInfo(func=resolver, shape="self_only", arg_coercers=[], is_async_gen=False)
 
 plan = SchemaPlan(
     query="Query", mutation=None, subscription=None,
@@ -516,7 +538,7 @@ plan = SchemaPlan(
                       resolver_key="Query.value"),
         )),
     ),
-    resolvers={"Query.value": resolver},
+    resolvers={"Query.value": info},
 )
 "#
                     ),

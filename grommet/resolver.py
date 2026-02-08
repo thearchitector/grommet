@@ -14,6 +14,25 @@ if TYPE_CHECKING:
 _MIN_CONTEXT_PARAMS = 2
 
 
+class ResolverInfo:
+    """Resolver metadata for Rust-side dispatch. Not a wrapper — holds the raw function."""
+
+    __slots__ = ("func", "shape", "arg_coercers", "is_async_gen")
+
+    def __init__(
+        self,
+        func: "Callable[..., Any]",
+        shape: str,
+        arg_coercers: list[tuple[str, "Callable[[Any], Any] | None"]],
+        *,
+        is_async_gen: bool = False,
+    ) -> None:
+        self.func = func
+        self.shape = shape
+        self.arg_coercers = arg_coercers
+        self.is_async_gen = is_async_gen
+
+
 def _resolver_params(resolver: "Callable[..., Any]") -> list[inspect.Parameter]:
     sig = inspect.signature(resolver)
     return [
@@ -46,10 +65,10 @@ def _resolver_name(resolver: "Callable[..., Any]") -> str:
     return getattr(resolver, "__name__", type(resolver).__name__)
 
 
-def _wrap_resolver(
+def _analyze_resolver(
     resolver: "Callable[..., Any]", *, kind: TypeKind, field_name: str
-) -> "Callable[..., Any]":
-    """Wrap a resolver with arg coercion."""
+) -> ResolverInfo:
+    """Analyze a resolver and return metadata for Rust-side dispatch."""
     resolver_name = _resolver_name(resolver)
     is_subscription = kind is TypeKind.SUBSCRIPTION
     is_asyncgen = inspect.isasyncgenfunction(resolver)
@@ -65,14 +84,14 @@ def _wrap_resolver(
 
     # params[0] is always self (the parent instance)
     # params[1] may be a Context[T] param — detected by type annotation
-    context_param: inspect.Parameter | None = None
+    has_context = False
     if len(params) >= _MIN_CONTEXT_PARAMS:
         ann = hints.get(params[1].name, params[1].annotation)
         if ann is not inspect._empty and _is_context_annotation(ann):
-            context_param = params[1]
+            has_context = True
 
     # GraphQL args start after self and optional context
-    arg_start = _MIN_CONTEXT_PARAMS if context_param is not None else 1
+    arg_start = _MIN_CONTEXT_PARAMS if has_context else 1
     arg_params = params[arg_start:]
 
     arg_coercers: list[tuple[str, "Callable[[Any], Any] | None"]] = []
@@ -82,17 +101,16 @@ def _wrap_resolver(
             raise resolver_missing_annotation(resolver_name, param.name)
         arg_coercers.append((param.name, _arg_coercer(annotation)))
 
-    async def wrapper(parent: "Any", context_obj: "Any", **kwargs: "Any") -> "Any":
-        call_kwargs: dict[str, "Any"] = {"self": parent}
-        if context_param is not None:
-            call_kwargs[context_param.name] = context_obj
-        for name, coercer in arg_coercers:
-            if name in kwargs:
-                value = kwargs[name]
-                call_kwargs[name] = value if coercer is None else coercer(value)
-        result = resolver(**call_kwargs)
-        if is_subscription and is_asyncgen:
-            return result
-        return await result
+    has_args = len(arg_coercers) > 0
+    if has_context and has_args:
+        shape = "self_context_and_args"
+    elif has_context:
+        shape = "self_and_context"
+    elif has_args:
+        shape = "self_and_args"
+    else:
+        shape = "self_only"
 
-    return wrapper
+    return ResolverInfo(
+        func=resolver, shape=shape, arg_coercers=arg_coercers, is_async_gen=is_asyncgen
+    )

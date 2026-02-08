@@ -5,13 +5,15 @@ use pyo3::types::{PyAnyMethods, PyDict};
 
 use async_graphql::dynamic::TypeRef;
 
-use crate::types::{ArgDef, FieldDef, PyObj, SchemaDef, TypeDef, TypeKind};
+use crate::types::{
+    ArgDef, FieldDef, PyObj, ResolverEntry, ResolverShape, SchemaDef, TypeDef, TypeKind,
+};
 
 // extract schema components directly from SchemaPlan dataclass attributes
 pub(crate) fn parse_schema_plan(
     py: Python<'_>,
     plan: &Bound<'_, PyAny>,
-) -> PyResult<(SchemaDef, Vec<TypeDef>, HashMap<String, PyObj>)> {
+) -> PyResult<(SchemaDef, Vec<TypeDef>, HashMap<String, ResolverEntry>)> {
     let schema_def = SchemaDef {
         query: plan.getattr("query")?.extract()?,
         mutation: plan.getattr("mutation")?.extract()?,
@@ -30,10 +32,38 @@ pub(crate) fn parse_schema_plan(
     let resolvers_dict: Bound<'_, PyDict> = plan.getattr("resolvers")?.extract()?;
     let mut resolver_map = HashMap::new();
     for (key, value) in resolvers_dict.iter() {
-        resolver_map.insert(key.extract()?, PyObj::new(value.unbind()));
+        resolver_map.insert(key.extract()?, parse_resolver_entry(py, &value)?);
     }
 
     Ok((schema_def, type_defs, resolver_map))
+}
+
+fn parse_resolver_entry(_py: Python<'_>, entry: &Bound<'_, PyAny>) -> PyResult<ResolverEntry> {
+    let func = entry.getattr("func")?.unbind();
+    let shape_str: String = entry.getattr("shape")?.extract()?;
+    let shape = ResolverShape::from_str(&shape_str)?;
+    let is_async_gen: bool = entry.getattr("is_async_gen")?.extract()?;
+
+    let coercers_list: Vec<Py<PyAny>> = entry.getattr("arg_coercers")?.extract()?;
+    let mut arg_coercers = Vec::with_capacity(coercers_list.len());
+    for item in &coercers_list {
+        let item = item.bind(_py);
+        let name: String = item.get_item(0)?.extract()?;
+        let coercer_obj = item.get_item(1)?;
+        let coercer = if coercer_obj.is_none() {
+            None
+        } else {
+            Some(PyObj::new(coercer_obj.unbind()))
+        };
+        arg_coercers.push((name, coercer));
+    }
+
+    Ok(ResolverEntry {
+        func: PyObj::new(func),
+        shape,
+        arg_coercers,
+        is_async_gen,
+    })
 }
 
 fn parse_type_plan(

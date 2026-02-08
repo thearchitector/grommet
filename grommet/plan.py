@@ -15,7 +15,7 @@ from .annotations import (
 from .coercion import _default_value_for_annotation, _input_field_default
 from .decorators import _FieldResolver
 from .metadata import MISSING, NO_DEFAULT, Field, TypeKind
-from .resolver import _resolver_arg_info, _wrap_resolver
+from .resolver import _analyze_resolver, _resolver_arg_info
 
 if TYPE_CHECKING:
     from builtins import type as pytype
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from typing import Any
 
     from .metadata import TypeMeta, TypeSpec
+    from .resolver import ResolverInfo
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -68,7 +69,7 @@ class SchemaPlan:
     mutation: str | None
     subscription: str | None
     types: tuple[TypePlan, ...]
-    resolvers: dict[str, "Callable[..., Any]"] = dataclasses.field(default_factory=dict)
+    resolvers: dict[str, "ResolverInfo"] = dataclasses.field(default_factory=dict)
 
 
 def _is_field_resolver(obj: object) -> bool:
@@ -128,7 +129,7 @@ def build_schema_graph(
 
     type_plans = _build_type_plans(types, query, mutation, subscription)
 
-    resolvers: dict[str, "Callable[..., Any]"] = {}
+    resolvers: dict[str, "ResolverInfo"] = {}
     resolved_type_plans = _wrap_plan_resolvers(type_plans, resolvers)
 
     return SchemaPlan(
@@ -141,9 +142,9 @@ def build_schema_graph(
 
 
 def _wrap_plan_resolvers(
-    type_plans: list[TypePlan], resolvers: dict[str, "Callable[..., Any]"]
+    type_plans: list[TypePlan], resolvers: dict[str, "ResolverInfo"]
 ) -> list[TypePlan]:
-    """Wrap resolvers on field plans and populate resolver keys."""
+    """Analyze resolvers on field plans and populate resolver keys."""
 
     result: list[TypePlan] = []
     for tp in type_plans:
@@ -153,9 +154,9 @@ def _wrap_plan_resolvers(
         new_fields: list[FieldPlan] = []
         for fp in tp.fields:
             if fp.resolver is not None:
-                wrapper = _wrap_resolver(fp.resolver, kind=tp.kind, field_name=fp.name)
+                info = _analyze_resolver(fp.resolver, kind=tp.kind, field_name=fp.name)
                 key = f"{tp.name}.{fp.name}"
-                resolvers[key] = wrapper
+                resolvers[key] = info
                 new_fields.append(dataclasses.replace(fp, resolver_key=key))
             else:
                 new_fields.append(fp)

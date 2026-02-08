@@ -78,10 +78,52 @@ pub(crate) struct TypeDef {
 
 use async_graphql::dynamic::TypeRef;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResolverShape {
+    SelfOnly,
+    SelfAndContext,
+    SelfAndArgs,
+    SelfContextAndArgs,
+}
+
+impl ResolverShape {
+    pub(crate) fn from_str(s: &str) -> PyResult<Self> {
+        match s {
+            "self_only" => Ok(ResolverShape::SelfOnly),
+            "self_and_context" => Ok(ResolverShape::SelfAndContext),
+            "self_and_args" => Ok(ResolverShape::SelfAndArgs),
+            "self_context_and_args" => Ok(ResolverShape::SelfContextAndArgs),
+            _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Unknown resolver shape: {s}"
+            ))),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ResolverEntry {
+    pub(crate) func: PyObj,
+    pub(crate) shape: ResolverShape,
+    pub(crate) arg_coercers: Vec<(String, Option<PyObj>)>,
+    pub(crate) is_async_gen: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScalarHint {
+    String,
+    Int,
+    Float,
+    Boolean,
+    ID,
+    Object,
+    Unknown,
+}
+
 #[derive(Clone)]
 pub(crate) struct FieldContext {
-    pub(crate) resolver: Option<PyObj>,
-    pub(crate) arg_names: Vec<String>,
+    pub(crate) resolver: Option<ResolverEntry>,
     pub(crate) source_name: String,
     pub(crate) output_type: TypeRef,
+    pub(crate) context_cls: Option<PyObj>,
+    pub(crate) scalar_hint: ScalarHint,
 }
