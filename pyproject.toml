@@ -85,6 +85,8 @@ split-on-trailing-comma = false
 
 [tool.maturin]
 module-name = "grommet._core"
+profile = "release"
+editable-profile = "release"
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]

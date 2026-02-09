@@ -42,14 +42,14 @@ pub(crate) async fn resolve_field(
     ctx: ResolverContext<'_>,
     field_ctx: Arc<FieldContext>,
 ) -> Result<Option<FieldValue<'_>>, Error> {
-    let entry = field_ctx.resolver.as_ref().expect("resolver missing");
-    let value = resolve_with_resolver(&ctx, &field_ctx, entry).await?;
-    let hint = field_ctx.scalar_hint;
-    let field_value = Python::attach(|py| {
-        py_to_field_value_for_type(py, value.bind(py), &field_ctx.output_type, hint)
-    })
-    .map_err(py_err_to_error)?;
-    Ok(Some(field_value))
+        let entry = field_ctx.resolver.as_ref().expect("resolver missing");
+        let value = resolve_with_resolver(&ctx, &field_ctx, entry).await?;
+        let hint = field_ctx.scalar_hint;
+        let field_value = Python::attach(|py| {
+            py_to_field_value_for_type(py, value.bind(py), &field_ctx.output_type, hint)
+        })
+        .map_err(py_err_to_error)?;
+        Ok(Some(field_value))
 }
 
 pub(crate) async fn resolve_subscription_stream<'a>(
@@ -110,42 +110,43 @@ async fn resolve_with_resolver(
     field_ctx: &FieldContext,
     entry: &ResolverEntry,
 ) -> Result<Py<PyAny>, Error> {
-    // Lazy state extraction: only look up state when the resolver needs context
-    let needs_state = matches!(
-        entry.shape,
-        ResolverShape::SelfAndContext | ResolverShape::SelfContextAndArgs
-    );
-    let state = if needs_state {
-        ctx.data::<StateValue>().ok().map(|s| s.0.clone())
-    } else {
-        None
-    };
-    let parent = ctx.parent_value.try_downcast_ref::<PyObj>().ok().cloned();
+    async {
+        // Lazy state extraction: only look up state when the resolver needs context
+        let needs_state = matches!(
+            entry.shape,
+            ResolverShape::SelfAndContext | ResolverShape::SelfContextAndArgs
+        );
+        let state = if needs_state {
+            ctx.data::<StateValue>().ok().map(|s| s.0.clone())
+        } else {
+            None
+        };
+        let parent = ctx.parent_value.try_downcast_ref::<PyObj>().ok().cloned();
 
-    if entry.is_async_gen {
-        // Async generators (subscriptions): call resolver, return generator directly
-        Python::attach(|py| {
-            call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())
-        })
-        .map_err(py_err_to_error)
-    } else if entry.is_async {
-        // Async coroutine: call resolver + set up future in one GIL block
-        let future: BoxFut = Python::attach(|py| {
-            let coroutine =
-                call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())?;
-            let bound = coroutine.into_bound(py);
-            let fut = tokio::into_future(bound)?;
-            Ok(Box::pin(fut) as BoxFut)
-        })
-        .map_err(py_err_to_error)?;
-        future.await.map_err(py_err_to_error)
-    } else {
-        // Sync resolver: call resolver, return result directly (no into_future)
-        Python::attach(|py| {
-            call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())
-        })
-        .map_err(py_err_to_error)
-    }
+        if entry.is_async_gen {
+            // Async generators (subscriptions): call resolver, return generator directly
+            Python::attach(|py| {
+                call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())
+            })
+            .map_err(py_err_to_error)
+        } else if entry.is_async {
+            // Async coroutine: call resolver + set up future in one GIL block
+            let future: BoxFut = Python::attach(|py| {
+                let coroutine =
+                    call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())?;
+                let bound = coroutine.into_bound(py);
+                let fut = tokio::into_future(bound)?;
+                Ok(Box::pin(fut) as BoxFut)
+            })
+            .map_err(py_err_to_error)?;
+            future.await.map_err(py_err_to_error)
+        } else {
+            // Sync resolver: call resolver, return result directly (no into_future)
+            Python::attach(|py| {
+                call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())
+            })
+            .map_err(py_err_to_error)
+        }
 }
 
 fn build_context_obj(

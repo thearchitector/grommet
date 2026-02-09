@@ -490,7 +490,9 @@ async def coro():
             });
             let awaited = crate::with_py(|py| {
                 pyo3_async_runtimes::tokio::run(py, async move {
-                    let future = crate::runtime::into_future(awaitable)?;
+                    let future = Python::attach(|py| {
+                        pyo3_async_runtimes::tokio::into_future(awaitable.into_bound(py))
+                    })?;
                     future.await
                 })
             })

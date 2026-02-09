@@ -78,7 +78,7 @@ pub(crate) struct TypeDef {
 
 use async_graphql::dynamic::TypeRef;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ResolverShape {
     SelfOnly,
     SelfAndContext,

@@ -9,9 +9,3 @@ where
 {
     pyo3_async_runtimes::tokio::future_into_py(py, fut)
 }
-
-pub(crate) fn into_future(
-    awaitable: Py<PyAny>,
-) -> PyResult<impl Future<Output = PyResult<Py<PyAny>>> + Send + 'static> {
-    Python::attach(|py| pyo3_async_runtimes::tokio::into_future(awaitable.into_bound(py)))
-}
