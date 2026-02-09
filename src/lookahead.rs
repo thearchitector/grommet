@@ -1,69 +1,68 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_graphql::dynamic::ResolverContext;
 use pyo3::prelude::*;
 
-#[pyclass(module = "grommet._core", name = "Lookahead", from_py_object)]
+/// Lightweight owned snapshot of a selection set level, shared via `Arc` so
+/// that `peek()` never deep-clones.
+struct SelectionNode {
+    children: HashMap<String, Arc<SelectionNode>>,
+}
+
+impl SelectionNode {
+    fn empty() -> Arc<Self> {
+        Arc::new(Self {
+            children: HashMap::new(),
+        })
+    }
+}
+
+#[pyclass(module = "grommet._core", name = "Graph", frozen, from_py_object)]
 #[derive(Clone)]
-pub(crate) struct Lookahead {
-    exists: bool,
-    children: HashMap<String, Lookahead>,
+pub(crate) struct Graph {
+    node: Arc<SelectionNode>,
 }
 
 #[pymethods]
-impl Lookahead {
-    fn exists(&self) -> bool {
-        self.exists
+impl Graph {
+    fn requests(&self, name: &str) -> bool {
+        self.node.children.contains_key(name)
     }
 
-    fn field(&self, name: &str) -> Lookahead {
-        self.children
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| Lookahead {
-                exists: false,
-                children: HashMap::new(),
-            })
-    }
-}
-
-impl Lookahead {
-    fn empty() -> Self {
-        Self {
-            exists: false,
-            children: HashMap::new(),
+    fn peek(&self, name: &str) -> Graph {
+        Graph {
+            node: self
+                .node
+                .children
+                .get(name)
+                .cloned()
+                .unwrap_or_else(SelectionNode::empty),
         }
     }
 }
 
 const MAX_DEPTH: u32 = 32;
 
-pub(crate) fn extract_lookahead(ctx: &ResolverContext<'_>) -> Lookahead {
+pub(crate) fn extract_graph(ctx: &ResolverContext<'_>) -> Graph {
     let current = ctx.ctx.field();
-    build_from_selection(current.selection_set(), 0)
+    Graph {
+        node: build_node(current.selection_set(), 0),
+    }
 }
 
-fn build_from_selection<'a>(
+fn build_node<'a>(
     fields: impl Iterator<Item = async_graphql::SelectionField<'a>>,
     depth: u32,
-) -> Lookahead {
+) -> Arc<SelectionNode> {
     if depth >= MAX_DEPTH {
-        return Lookahead::empty();
+        return SelectionNode::empty();
     }
     let mut children = HashMap::new();
     for field in fields {
         let name = field.name().to_string();
-        let child = build_from_selection(field.selection_set(), depth + 1);
-        children.insert(
-            name,
-            Lookahead {
-                exists: true,
-                children: child.children,
-            },
-        );
+        let child = build_node(field.selection_set(), depth + 1);
+        children.insert(name, child);
     }
-    Lookahead {
-        exists: true,
-        children,
-    }
+    Arc::new(SelectionNode { children })
 }

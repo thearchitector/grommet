@@ -198,12 +198,12 @@ result = await schema.execute("{ greeting }", state=MyState(request_id="123"))
 print(result.data)  # {'greeting': 'Hello request 123!'}
 ```
 
-Analyze the current operation by peeking into the execution context:
+Analyze (and potentially optimize) the current operation by peeking into the execution context:
 
 ```python
 @grommet.type
 @dataclass
-class Object:
+class SubObject:
     @grommet.field
     async def b(self) -> str:
         return "foo"
@@ -211,39 +211,34 @@ class Object:
 
 @grommet.type
 @dataclass
-class Query:
+class Object:
     @grommet.field
     async def a(self) -> int:
         return 1
 
     @grommet.field
+    async def sub(self) -> SubObject:
+        return SubObject()
+
+
+@grommet.type
+@dataclass
+class Query:
+    @grommet.field
     async def obj(self, context: grommet.Context) -> Object:
-        print("requests a:", context.requests("a"))
-        print("requests b:", context.peek().requests("b"))
-        # NOTE: peek also accepts a 'name' argument to peek into a specific field's subgraph.
-        # `peek()` is a shortcut for `peek("obj")`, useful for peeking into the current field.
-        print("requests b2:", context.peek("obj2").requests("b"))
+        print("obj requests a:", context.graph.requests("a"))
+        print("obj requests b via sub:", context.graph.peek("sub").requests("b"))
         return Object()
 
-    @grommet.field
-    async def obj2(self) -> Object:
-        return Object()
 
 schema = grommet.Schema(query=Query)
-await schema.execute("{ a }")
+await schema.execute("{ obj { a } }")
 # >>> requests a: True
 # >>> requests b: False
-# >>> requests b2: False
 
-await schema.execute("{ obj { b } }")
+await schema.execute("{ obj { sub { b } } }")
 # >>> requests a: False
 # >>> requests b: True
-# >>> requests b2: False
-
-await schema.execute("{ obj { b } obj2 { b } }")
-# >>> requests a: False
-# >>> requests b: True
-# >>> requests b2: True
 ```
 
 ## Development

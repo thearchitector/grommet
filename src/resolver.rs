@@ -10,7 +10,7 @@ use pyo3::types::{PyAnyMethods, PyDict};
 use pyo3_async_runtimes::tokio;
 
 use crate::errors::{py_err_to_error, subscription_requires_async_iterator};
-use crate::lookahead::extract_lookahead;
+use crate::lookahead::extract_graph;
 use crate::types::{FieldContext, PyObj, ResolverEntry, ResolverShape, ScalarHint, StateValue};
 use crate::values::{py_to_field_value_for_type, value_to_py};
 
@@ -188,14 +188,14 @@ fn build_context_obj(
     state: Option<&PyObj>,
     context_cls: &PyObj,
 ) -> PyResult<Py<PyAny>> {
-    let lookahead = extract_lookahead(ctx);
-    let lookahead_py = lookahead.into_pyobject(py)?.into_any().unbind();
+    let graph = extract_graph(ctx);
+    let graph_py = graph.into_pyobject(py)?.into_any().unbind();
     let state_py = match state {
         Some(s) => s.clone_ref(py),
         None => py.None(),
     };
     let kwargs = PyDict::new(py);
-    kwargs.set_item("_lookahead", lookahead_py)?;
+    kwargs.set_item("graph", graph_py)?;
     kwargs.set_item("state", state_py)?;
     let context_obj = context_cls.bind(py).call((), Some(&kwargs))?;
     Ok(context_obj.unbind())
