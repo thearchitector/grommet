@@ -65,8 +65,8 @@ impl SchemaWrapper {
 impl SchemaWrapper {
     #[new]
     fn new(py: Python, plan: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let (schema_def, type_defs, resolver_map) = parse_schema_plan(py, plan)?;
-        let schema = build_schema(schema_def, type_defs, resolver_map)?;
+        let (schema_def, type_defs) = parse_schema_plan(py, plan)?;
+        let schema = build_schema(schema_def, type_defs)?;
         Ok(SchemaWrapper {
             schema: Arc::new(schema),
         })

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_graphql::dynamic::{
@@ -6,24 +6,18 @@ use async_graphql::dynamic::{
     SubscriptionField, SubscriptionFieldFuture, TypeRef,
 };
 use pyo3::prelude::*;
-use pyo3::types::PyString;
 
 use crate::errors::py_value_error;
-use crate::resolver::{resolve_field, resolve_field_sync, resolve_subscription_stream};
+use crate::resolver::{resolve_field, resolve_field_sync_fast, resolve_subscription_stream};
 use crate::types::{
-    ArgDef, FieldContext, FieldDef, PyObj, ResolverEntry, ResolverShape, ScalarHint, SchemaDef,
-    TypeDef, TypeKind,
+    ArgDef, FieldContext, FieldDef, PyObj, ResolverShape, ScalarHint, SchemaDef, TypeDef, TypeKind,
 };
 use crate::values::pyobj_to_value;
 
 // assemble the async-graphql schema from python-provided definitions
-pub(crate) fn build_schema(
-    schema_def: SchemaDef,
-    type_defs: Vec<TypeDef>,
-    resolver_map: HashMap<String, ResolverEntry>,
-) -> PyResult<Schema> {
+pub(crate) fn build_schema(schema_def: SchemaDef, type_defs: Vec<TypeDef>) -> PyResult<Schema> {
     // Cache the Context class once for all fields that need it
-    let context_cls = resolve_context_cls(&resolver_map)?;
+    let context_cls = resolve_context_cls(&type_defs)?;
 
     // Collect object type names for ScalarHint computation
     let object_names: HashSet<String> = type_defs
@@ -47,13 +41,8 @@ pub(crate) fn build_schema(
                         object = object.description(desc.as_str());
                     }
                     for field_def in type_def.fields {
-                        let field = build_field(
-                            py,
-                            field_def,
-                            &resolver_map,
-                            context_cls.as_ref(),
-                            &object_names,
-                        )?;
+                        let field =
+                            build_field(py, field_def, context_cls.as_ref(), &object_names)?;
                         object = object.field(field);
                     }
                     // SAFETY: we must take and put back because Schema::build is not Copy
@@ -69,7 +58,6 @@ pub(crate) fn build_schema(
                         let field = build_subscription_field(
                             py,
                             field_def,
-                            &resolver_map,
                             context_cls.as_ref(),
                             &object_names,
                         )?;
@@ -99,12 +87,16 @@ pub(crate) fn build_schema(
         .map_err(|err| py_value_error(err.to_string()))
 }
 
-fn resolve_context_cls(resolver_map: &HashMap<String, ResolverEntry>) -> PyResult<Option<PyObj>> {
-    let needs_context = resolver_map.values().any(|e| {
-        matches!(
-            e.shape,
-            ResolverShape::SelfAndContext | ResolverShape::SelfContextAndArgs
-        )
+fn resolve_context_cls(type_defs: &[TypeDef]) -> PyResult<Option<PyObj>> {
+    let needs_context = type_defs.iter().any(|td| {
+        td.fields.iter().any(|fd| {
+            fd.resolver.as_ref().is_some_and(|e| {
+                matches!(
+                    e.shape,
+                    ResolverShape::SelfAndContext | ResolverShape::SelfContextAndArgs
+                )
+            })
+        })
     });
     if !needs_context {
         return Ok(None);
@@ -116,27 +108,20 @@ fn resolve_context_cls(resolver_map: &HashMap<String, ResolverEntry>) -> PyResul
 }
 
 fn build_field_context(
-    py: Python<'_>,
-    field_def: &FieldDef,
-    resolver_map: &HashMap<String, ResolverEntry>,
+    _py: Python<'_>,
+    field_def: FieldDef,
     context_cls: Option<&PyObj>,
     object_names: &HashSet<String>,
-) -> Arc<FieldContext> {
-    let resolver = field_def
-        .resolver
-        .as_ref()
-        .and_then(|key| resolver_map.get(key).cloned());
-    let needs_ctx = resolver.as_ref().is_some_and(|r| {
+) -> (Arc<FieldContext>, FieldDef) {
+    let needs_ctx = field_def.resolver.as_ref().is_some_and(|r| {
         matches!(
             r.shape,
             ResolverShape::SelfAndContext | ResolverShape::SelfContextAndArgs
         )
     });
     let scalar_hint = compute_scalar_hint(&field_def.type_ref, object_names);
-    let source_name_py = std::sync::Arc::new(PyString::new(py, &field_def.source).unbind());
-    Arc::new(FieldContext {
-        resolver,
-        source_name_py,
+    let ctx = Arc::new(FieldContext {
+        resolver: field_def.resolver.clone(),
         output_type: field_def.type_ref.clone(),
         context_cls: if needs_ctx {
             context_cls.cloned()
@@ -144,7 +129,8 @@ fn build_field_context(
             None
         },
         scalar_hint,
-    })
+    });
+    (ctx, field_def)
 }
 
 fn compute_scalar_hint(type_ref: &TypeRef, object_names: &HashSet<String>) -> ScalarHint {
@@ -194,21 +180,20 @@ fn build_input_values(args: Vec<ArgDef>) -> PyResult<Vec<InputValue>> {
 fn build_field(
     py: Python<'_>,
     field_def: FieldDef,
-    resolver_map: &HashMap<String, ResolverEntry>,
     context_cls: Option<&PyObj>,
     object_names: &HashSet<String>,
 ) -> PyResult<Field> {
-    let field_ctx = build_field_context(py, &field_def, resolver_map, context_cls, object_names);
+    let (field_ctx, field_def) = build_field_context(py, field_def, context_cls, object_names);
     let type_ref = field_ctx.output_type.clone();
-    let has_resolver = field_ctx.resolver.is_some();
+    let is_async = field_ctx.resolver.as_ref().is_some_and(|r| r.is_async);
 
     let mut field = Field::new(field_def.name, type_ref, move |ctx| {
-        if has_resolver {
+        if is_async {
             let field_ctx = field_ctx.clone();
             FieldFuture::new(async move { resolve_field(ctx, field_ctx).await })
         } else {
-            // Synchronous path: resolve parent attribute + convert in one GIL block
-            let result = resolve_field_sync(&ctx, &field_ctx);
+            // Sync fast-path: call resolver + convert in one GIL block, no async overhead
+            let result = resolve_field_sync_fast(&ctx, &field_ctx);
             match result {
                 Ok(v) => FieldFuture::Value(Some(v)),
                 Err(e) => FieldFuture::new(async move { Err::<Option<FieldValue<'_>>, _>(e) }),
@@ -224,11 +209,10 @@ fn build_field(
 fn build_subscription_field(
     py: Python<'_>,
     field_def: FieldDef,
-    resolver_map: &HashMap<String, ResolverEntry>,
     context_cls: Option<&PyObj>,
     object_names: &HashSet<String>,
 ) -> PyResult<SubscriptionField> {
-    let field_ctx = build_field_context(py, &field_def, resolver_map, context_cls, object_names);
+    let (field_ctx, field_def) = build_field_context(py, field_def, context_cls, object_names);
     let type_ref = field_ctx.output_type.clone();
 
     let mut field = SubscriptionField::new(field_def.name, type_ref, move |ctx| {

@@ -522,12 +522,8 @@ mod parse {
 from grommet.plan import SchemaPlan, TypePlan, FieldPlan, ArgPlan
 from grommet.metadata import TypeKind, TypeSpec
 
-from grommet.resolver import ResolverInfo
-
 async def resolver(self):
     return 1
-
-info = ResolverInfo(func=resolver, shape="self_only", arg_coercers=[], is_async_gen=False, is_async=True)
 
 plan = SchemaPlan(
     query="Query", mutation=None, subscription=None,
@@ -535,13 +531,16 @@ plan = SchemaPlan(
         TypePlan(kind=TypeKind.OBJECT, name="Query", cls=object, fields=(
             FieldPlan(name="value", source="value",
                       type_spec=TypeSpec(kind="named", name="Int", nullable=True),
+                      func=resolver,
+                      shape="self_only",
+                      arg_coercers=[],
+                      is_async=True,
+                      is_async_gen=False,
                       args=(ArgPlan(name="limit",
                                     type_spec=TypeSpec(kind="named", name="Int", nullable=True),
-                                    default=10),),
-                      resolver_key="Query.value"),
+                                    default=10),)),
         )),
     ),
-    resolvers={"Query.value": info},
 )
 "#
                     ),
@@ -551,15 +550,16 @@ plan = SchemaPlan(
                 .unwrap();
 
                 let plan = locals.get_item("plan").unwrap().unwrap();
-                let (schema_def, type_defs, resolver_map) = parse_schema_plan(py, &plan).unwrap();
+                let (schema_def, type_defs) = parse_schema_plan(py, &plan).unwrap();
                 assert_eq!(schema_def.query, "Query");
                 assert_eq!(type_defs.len(), 1);
                 assert_eq!(type_defs[0].name, "Query");
                 assert_eq!(type_defs[0].fields[0].name, "value");
                 assert_eq!(type_defs[0].fields[0].args[0].name, "limit");
                 assert!(type_defs[0].fields[0].args[0].default_value.is_some());
-                assert_eq!(resolver_map.len(), 1);
-                assert!(resolver_map.contains_key("Query.value"));
+                let resolver = type_defs[0].fields[0].resolver.as_ref().unwrap();
+                assert!(resolver.is_async);
+                assert!(!resolver.is_async_gen);
             });
         }
     }

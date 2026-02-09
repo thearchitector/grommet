@@ -1,5 +1,6 @@
 import dataclasses
 import inspect
+from operator import attrgetter
 from typing import TYPE_CHECKING
 
 from ._annotations import get_annotations
@@ -23,7 +24,6 @@ if TYPE_CHECKING:
     from typing import Any
 
     from .metadata import TypeMeta, TypeSpec
-    from .resolver import ResolverInfo
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -42,12 +42,17 @@ class FieldPlan:
     name: str
     source: str
     type_spec: "TypeSpec"
-    resolver: "Callable[..., Any] | None" = None
+    func: "Callable[..., Any] | None" = None
+    shape: str | None = None
+    arg_coercers: list[tuple[str, "Callable[[Any], Any] | None"]] = dataclasses.field(
+        default_factory=list
+    )
+    is_async: bool = False
+    is_async_gen: bool = False
     args: tuple["ArgPlan", ...] = ()
     default: "Any" = NO_DEFAULT
     description: str | None = None
     deprecation: str | None = None
-    resolver_key: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -69,7 +74,6 @@ class SchemaPlan:
     mutation: str | None
     subscription: str | None
     types: tuple[TypePlan, ...]
-    resolvers: dict[str, "ResolverInfo"] = dataclasses.field(default_factory=dict)
 
 
 def _is_field_resolver(obj: object) -> bool:
@@ -129,39 +133,12 @@ def build_schema_graph(
 
     type_plans = _build_type_plans(types, query, mutation, subscription)
 
-    resolvers: dict[str, "ResolverInfo"] = {}
-    resolved_type_plans = _wrap_plan_resolvers(type_plans, resolvers)
-
     return SchemaPlan(
         query=_get_type_meta(query).name,
         mutation=_get_type_meta(mutation).name if mutation else None,
         subscription=_get_type_meta(subscription).name if subscription else None,
-        types=tuple(resolved_type_plans),
-        resolvers=resolvers,
+        types=tuple(type_plans),
     )
-
-
-def _wrap_plan_resolvers(
-    type_plans: list[TypePlan], resolvers: dict[str, "ResolverInfo"]
-) -> list[TypePlan]:
-    """Analyze resolvers on field plans and populate resolver keys."""
-
-    result: list[TypePlan] = []
-    for tp in type_plans:
-        if tp.kind is TypeKind.INPUT:
-            result.append(tp)
-            continue
-        new_fields: list[FieldPlan] = []
-        for fp in tp.fields:
-            if fp.resolver is not None:
-                info = _analyze_resolver(fp.resolver, kind=tp.kind, field_name=fp.name)
-                key = f"{tp.name}.{fp.name}"
-                resolvers[key] = info
-                new_fields.append(dataclasses.replace(fp, resolver_key=key))
-            else:
-                new_fields.append(fp)
-        result.append(dataclasses.replace(tp, fields=tuple(new_fields)))
-    return result
 
 
 def _build_type_plans(
@@ -208,9 +185,9 @@ def _build_type_plans(
 
 
 def _make_root_field_resolver(cls: "pytype", attr_name: str) -> "Callable[..., Any]":
-    """Create a synthetic async resolver for a root type's plain dataclass field."""
+    """Create a synthetic sync resolver for a root type's plain dataclass field."""
 
-    async def _root_resolver(self: object) -> object:  # noqa: ARG001
+    def _root_resolver(self: object) -> object:  # noqa: ARG001
         instance = cls()
         return getattr(instance, attr_name)
 
@@ -238,10 +215,11 @@ def _build_field_plans(
             annotation, expect_input=False, force_nullable=force_nullable
         )
 
-        resolver = None
         # Root types have no parent in async-graphql, so plain fields need synthetic resolvers
         if is_root:
-            resolver = _make_root_field_resolver(cls, dc_field.name)
+            func = _make_root_field_resolver(cls, dc_field.name)
+        else:
+            func = attrgetter(dc_field.name)
 
         # Description from Annotated Field metadata
         annotated_field = _get_annotated_field_meta(annotation)
@@ -254,7 +232,8 @@ def _build_field_plans(
                 name=dc_field.name,
                 source=dc_field.name,
                 type_spec=type_spec,
-                resolver=resolver,
+                func=func,
+                shape="self_only",
                 description=description,
             )
         )
@@ -297,12 +276,19 @@ def _build_field_plans(
             )
 
         field_name = attr_value.name or attr_name
+        info = _analyze_resolver(
+            attr_value.resolver, kind=type_kind, field_name=field_name
+        )
         field_plans.append(
             FieldPlan(
                 name=field_name,
                 source=attr_name,
                 type_spec=type_spec,
-                resolver=attr_value.resolver,
+                func=info.func,
+                shape=info.shape,
+                arg_coercers=info.arg_coercers,
+                is_async=info.is_async,
+                is_async_gen=info.is_async_gen,
                 args=tuple(args),
                 description=attr_value.description,
                 deprecation=attr_value.deprecation_reason,

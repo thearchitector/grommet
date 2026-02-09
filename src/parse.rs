@@ -1,7 +1,5 @@
-use std::collections::HashMap;
-
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyDict};
+use pyo3::types::PyAnyMethods;
 
 use async_graphql::dynamic::TypeRef;
 
@@ -13,7 +11,7 @@ use crate::types::{
 pub(crate) fn parse_schema_plan(
     py: Python<'_>,
     plan: &Bound<'_, PyAny>,
-) -> PyResult<(SchemaDef, Vec<TypeDef>, HashMap<String, ResolverEntry>)> {
+) -> PyResult<(SchemaDef, Vec<TypeDef>)> {
     let schema_def = SchemaDef {
         query: plan.getattr("query")?.extract()?,
         mutation: plan.getattr("mutation")?.extract()?,
@@ -29,43 +27,7 @@ pub(crate) fn parse_schema_plan(
         type_defs.push(parse_type_plan(py, item.bind(py), &no_default, &missing)?);
     }
 
-    let resolvers_dict: Bound<'_, PyDict> = plan.getattr("resolvers")?.extract()?;
-    let mut resolver_map = HashMap::new();
-    for (key, value) in resolvers_dict.iter() {
-        resolver_map.insert(key.extract()?, parse_resolver_entry(py, &value)?);
-    }
-
-    Ok((schema_def, type_defs, resolver_map))
-}
-
-fn parse_resolver_entry(_py: Python<'_>, entry: &Bound<'_, PyAny>) -> PyResult<ResolverEntry> {
-    let func = entry.getattr("func")?.unbind();
-    let shape_str: String = entry.getattr("shape")?.extract()?;
-    let shape = ResolverShape::from_str(&shape_str)?;
-    let is_async_gen: bool = entry.getattr("is_async_gen")?.extract()?;
-    let is_async: bool = entry.getattr("is_async")?.extract()?;
-
-    let coercers_list: Vec<Py<PyAny>> = entry.getattr("arg_coercers")?.extract()?;
-    let mut arg_coercers = Vec::with_capacity(coercers_list.len());
-    for item in &coercers_list {
-        let item = item.bind(_py);
-        let name: String = item.get_item(0)?.extract()?;
-        let coercer_obj = item.get_item(1)?;
-        let coercer = if coercer_obj.is_none() {
-            None
-        } else {
-            Some(PyObj::new(coercer_obj.unbind()))
-        };
-        arg_coercers.push((name, coercer));
-    }
-
-    Ok(ResolverEntry {
-        func: PyObj::new(func),
-        shape,
-        arg_coercers,
-        is_async_gen,
-        is_async,
-    })
+    Ok((schema_def, type_defs))
 }
 
 fn parse_type_plan(
@@ -105,10 +67,8 @@ fn parse_field_plan(
     missing: &Bound<'_, PyAny>,
 ) -> PyResult<FieldDef> {
     let name: String = item.getattr("name")?.extract()?;
-    let source: String = item.getattr("source")?.extract()?;
     let type_spec = item.getattr("type_spec")?;
     let type_ref = type_spec_to_type_ref(&type_spec)?;
-    let resolver_key: Option<String> = item.getattr("resolver_key")?.extract()?;
     let description: Option<String> = item.getattr("description")?.extract()?;
     let deprecation: Option<String> = item.getattr("deprecation")?.extract()?;
 
@@ -125,12 +85,45 @@ fn parse_field_plan(
         args.push(parse_arg_plan(py, arg_item.bind(py), missing)?);
     }
 
+    // Parse inline resolver fields
+    let func_obj = item.getattr("func")?;
+    let resolver = if func_obj.is_none() {
+        None
+    } else {
+        let shape_obj = item.getattr("shape")?;
+        let shape_str: String = shape_obj.extract()?;
+        let shape = ResolverShape::from_str(&shape_str)?;
+        let is_async: bool = item.getattr("is_async")?.extract()?;
+        let is_async_gen: bool = item.getattr("is_async_gen")?.extract()?;
+
+        let coercers_list: Vec<Py<PyAny>> = item.getattr("arg_coercers")?.extract()?;
+        let mut arg_coercers = Vec::with_capacity(coercers_list.len());
+        for coercer_item in &coercers_list {
+            let coercer_item = coercer_item.bind(py);
+            let coercer_name: String = coercer_item.get_item(0)?.extract()?;
+            let coercer_obj = coercer_item.get_item(1)?;
+            let coercer = if coercer_obj.is_none() {
+                None
+            } else {
+                Some(PyObj::new(coercer_obj.unbind()))
+            };
+            arg_coercers.push((coercer_name, coercer));
+        }
+
+        Some(ResolverEntry {
+            func: PyObj::new(func_obj.unbind()),
+            shape,
+            arg_coercers,
+            is_async,
+            is_async_gen,
+        })
+    };
+
     Ok(FieldDef {
         name,
-        source,
         type_ref,
         args,
-        resolver: resolver_key,
+        resolver,
         description,
         deprecation,
         default_value,

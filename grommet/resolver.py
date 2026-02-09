@@ -1,4 +1,7 @@
+import ast
 import inspect
+import textwrap
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, get_origin
 
 from ._annotations import get_annotations
@@ -14,25 +17,15 @@ if TYPE_CHECKING:
 _MIN_CONTEXT_PARAMS = 2
 
 
-class ResolverInfo:
-    """Resolver metadata for Rust-side dispatch. Not a wrapper — holds the raw function."""
+@dataclass(frozen=True, slots=True)
+class ResolverResult:
+    """Result of resolver analysis, used to populate FieldPlan inline."""
 
-    __slots__ = ("func", "shape", "arg_coercers", "is_async_gen", "is_async")
-
-    def __init__(
-        self,
-        func: "Callable[..., Any]",
-        shape: str,
-        arg_coercers: list[tuple[str, "Callable[[Any], Any] | None"]],
-        *,
-        is_async_gen: bool = False,
-        is_async: bool = True,
-    ) -> None:
-        self.func = func
-        self.shape = shape
-        self.arg_coercers = arg_coercers
-        self.is_async_gen = is_async_gen
-        self.is_async = is_async
+    func: "Callable[..., Any]"
+    shape: str
+    arg_coercers: list[tuple[str, "Callable[[Any], Any] | None"]]
+    is_async: bool
+    is_async_gen: bool
 
 
 def _resolver_params(resolver: "Callable[..., Any]") -> list[inspect.Parameter]:
@@ -67,18 +60,85 @@ def _resolver_name(resolver: "Callable[..., Any]") -> str:
     return getattr(resolver, "__name__", type(resolver).__name__)
 
 
+def _has_await(func: "Callable[..., Any]") -> bool:
+    """Check if an async function body contains any await expressions."""
+    try:
+        source = textwrap.dedent(inspect.getsource(func))
+        tree = ast.parse(source)
+    except (OSError, TypeError, SyntaxError):
+        return True
+
+    fn_name = getattr(func, "__name__", None)
+    f = next(
+        (
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name == fn_name
+        ),
+        None,
+    )
+    if not f:
+        return True
+
+    class _AwaitVisitor(ast.NodeVisitor):
+        found = False
+
+        def visit_Await(self, n: ast.Await) -> None:  # noqa: ARG002, N802
+            self.found = True
+
+        def visit_AsyncFor(self, n: ast.AsyncFor) -> None:  # noqa: ARG002, N802
+            self.found = True
+
+        def visit_AsyncWith(self, n: ast.AsyncWith) -> None:  # noqa: ARG002, N802
+            self.found = True
+
+        def visit_FunctionDef(self, n: ast.FunctionDef) -> None:  # noqa: ARG002, N802
+            return
+
+        def visit_AsyncFunctionDef(self, n: ast.AsyncFunctionDef) -> None:  # noqa: ARG002, N802
+            return
+
+        def visit_ClassDef(self, n: ast.ClassDef) -> None:  # noqa: ARG002, N802
+            return
+
+        def visit_Lambda(self, n: ast.Lambda) -> None:  # noqa: ARG002, N802
+            return
+
+    v = _AwaitVisitor()
+    for stmt in getattr(f, "body", []):
+        v.visit(stmt)
+        if v.found:
+            return True
+    return False
+
+
+def _syncify(func: "Callable[..., Any]") -> "Callable[..., Any]":
+    """Wrap an await-free async function into a sync callable."""
+
+    def _wrapper(*args: "Any", **kwargs: "Any") -> "Any":
+        coro = func(*args, **kwargs)
+        try:
+            coro.send(None)
+        except StopIteration as e:
+            return e.value
+        finally:
+            coro.close()
+
+    _wrapper.__name__ = func.__name__
+    _wrapper.__qualname__ = func.__qualname__
+    return _wrapper
+
+
 def _analyze_resolver(
     resolver: "Callable[..., Any]", *, kind: TypeKind, field_name: str
-) -> ResolverInfo:
+) -> ResolverResult:
     """Analyze a resolver and return metadata for Rust-side dispatch."""
     resolver_name = _resolver_name(resolver)
     is_subscription = kind is TypeKind.SUBSCRIPTION
     is_asyncgen = inspect.isasyncgenfunction(resolver)
     is_coroutine = inspect.iscoroutinefunction(resolver)
-    if is_subscription:
-        if not (is_asyncgen or is_coroutine):
-            raise resolver_requires_async(resolver_name, field_name)
-    elif not is_coroutine:
+    if is_subscription and not (is_asyncgen or is_coroutine):
         raise resolver_requires_async(resolver_name, field_name)
 
     hints = get_annotations(resolver)
@@ -113,10 +173,17 @@ def _analyze_resolver(
     else:
         shape = "self_only"
 
-    return ResolverInfo(
-        func=resolver,
+    # Determine async status; demote await-free coroutines to sync
+    is_async = is_coroutine or is_asyncgen
+    func = resolver
+    if is_coroutine and not is_asyncgen and not _has_await(resolver):
+        func = _syncify(resolver)
+        is_async = False
+
+    return ResolverResult(
+        func=func,
         shape=shape,
         arg_coercers=arg_coercers,
+        is_async=is_async,
         is_async_gen=is_asyncgen,
-        is_async=is_coroutine or is_asyncgen,
     )

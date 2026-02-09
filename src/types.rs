@@ -40,10 +40,9 @@ pub(crate) struct ArgDef {
 
 pub(crate) struct FieldDef {
     pub(crate) name: String,
-    pub(crate) source: String,
     pub(crate) type_ref: TypeRef,
     pub(crate) args: Vec<ArgDef>,
-    pub(crate) resolver: Option<String>,
+    pub(crate) resolver: Option<ResolverEntry>,
     pub(crate) description: Option<String>,
     pub(crate) deprecation: Option<String>,
     pub(crate) default_value: Option<PyObj>,
@@ -123,7 +122,6 @@ pub(crate) enum ScalarHint {
 #[derive(Clone)]
 pub(crate) struct FieldContext {
     pub(crate) resolver: Option<ResolverEntry>,
-    pub(crate) source_name_py: std::sync::Arc<Py<pyo3::types::PyString>>,
     pub(crate) output_type: TypeRef,
     pub(crate) context_cls: Option<PyObj>,
     pub(crate) scalar_hint: ScalarHint,

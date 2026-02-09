@@ -14,6 +14,7 @@ pub(crate) fn py_value_error(message: impl Into<String>) -> PyErr {
     PyErr::new::<PyValueError, _>(message.into())
 }
 
+#[allow(dead_code)]
 pub(crate) fn no_parent_value() -> Error {
     Error::new("No parent value for field")
 }
