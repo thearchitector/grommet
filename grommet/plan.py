@@ -13,7 +13,7 @@ from .annotations import (
     unwrap_async_iterable,
     walk_annotation,
 )
-from .coercion import _default_value_for_annotation, _input_field_default
+from .coercion import _input_field_default
 from .decorators import _FieldResolver
 from .metadata import MISSING, NO_DEFAULT, Field, TypeKind
 from .resolver import _analyze_resolver, _resolver_arg_info
@@ -23,16 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Any
 
-    from .metadata import TypeMeta, TypeSpec
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class ArgPlan:
-    """Planned argument for a resolver field."""
-
-    name: str
-    type_spec: "TypeSpec"
-    default: "Any" = NO_DEFAULT
+    from .metadata import ArgPlan, TypeMeta, TypeSpec
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -170,7 +161,7 @@ def _build_type_plans(
                 )
             )
         elif meta.kind is TypeKind.INPUT:
-            field_plans = _build_input_field_plans(cls)
+            field_plans = _build_dataclass_field_plans(cls, expect_input=True)
             type_plans.append(
                 TypePlan(
                     kind=TypeKind.INPUT,
@@ -184,59 +175,96 @@ def _build_type_plans(
     return type_plans
 
 
-def _make_root_field_resolver(cls: "pytype", attr_name: str) -> "Callable[..., Any]":
-    """Create a synthetic sync resolver for a root type's plain dataclass field."""
+def _build_dataclass_field_plans(
+    cls: "pytype", *, expect_input: bool, is_root: bool = False
+) -> list[FieldPlan]:
+    """Build FieldPlan entries for dataclass fields (shared by object and input types)."""
+    field_plans: list[FieldPlan] = []
+    hints = get_annotations(cls)
 
-    def _root_resolver(self: object) -> object:  # noqa: ARG001
-        instance = cls()
-        return getattr(instance, attr_name)
+    for dc_field in dataclasses.fields(cls):
+        annotation = hints.get(dc_field.name, dc_field.type)
+        if is_hidden_field(dc_field.name, annotation):
+            continue
 
-    _root_resolver.__name__ = f"_root_{cls.__name__}_{attr_name}"
-    _root_resolver.__qualname__ = _root_resolver.__name__
-    return _root_resolver
+        if expect_input:
+            force_nullable = (
+                dc_field.default is not MISSING
+                or dc_field.default_factory is not MISSING
+            )
+        else:
+            force_nullable = dc_field.default is None
+
+        type_spec = _type_spec_from_annotation(
+            annotation, expect_input=expect_input, force_nullable=force_nullable
+        )
+
+        annotated_field = _get_annotated_field_meta(annotation)
+        description = (
+            annotated_field.description if annotated_field is not None else None
+        )
+
+        if expect_input:
+            default_value = _input_field_default(dc_field, annotation)
+            field_default = (
+                default_value if default_value is not MISSING else NO_DEFAULT
+            )
+            field_plans.append(
+                FieldPlan(
+                    name=dc_field.name,
+                    source=dc_field.name,
+                    type_spec=type_spec,
+                    default=field_default,
+                    description=description,
+                )
+            )
+        else:
+            if is_root:
+                default = _resolve_root_default(dc_field)
+                func = _make_default_resolver(default)
+            else:
+                func = attrgetter(dc_field.name)
+            field_plans.append(
+                FieldPlan(
+                    name=dc_field.name,
+                    source=dc_field.name,
+                    type_spec=type_spec,
+                    func=func,
+                    shape="self_only",
+                    description=description,
+                )
+            )
+
+    return field_plans
+
+
+def _resolve_root_default(dc_field: "dataclasses.Field[Any]") -> object:
+    """Extract the default value for a root type's plain dataclass field."""
+    if dc_field.default is not MISSING:
+        return dc_field.default
+    if dc_field.default_factory is not MISSING:
+        return dc_field.default_factory()
+    msg = (
+        f"Root type field '{dc_field.name}' has no default value. "
+        "Root types have no parent object, so all plain fields must have defaults."
+    )
+    raise TypeError(msg)
+
+
+def _make_default_resolver(value: object) -> "Callable[..., Any]":
+    """Create a resolver that returns a fixed default value (for root type fields)."""
+
+    def _resolver(self: object) -> object:  # noqa: ARG001
+        return value
+
+    return _resolver
 
 
 def _build_field_plans(
     cls: "pytype", meta: "TypeMeta", type_kind: TypeKind, *, is_root: bool = False
 ) -> list[FieldPlan]:
     """Build FieldPlan for object/subscription fields."""
-
-    field_plans: list[FieldPlan] = []
-    hints = get_annotations(cls)
-
-    # Dataclass fields (plain data fields)
-    for dc_field in dataclasses.fields(cls):
-        annotation = hints.get(dc_field.name, dc_field.type)
-        if is_hidden_field(dc_field.name, annotation):
-            continue
-
-        force_nullable = dc_field.default is None
-        type_spec = _type_spec_from_annotation(
-            annotation, expect_input=False, force_nullable=force_nullable
-        )
-
-        # Root types have no parent in async-graphql, so plain fields need synthetic resolvers
-        if is_root:
-            func = _make_root_field_resolver(cls, dc_field.name)
-        else:
-            func = attrgetter(dc_field.name)
-
-        # Description from Annotated Field metadata
-        annotated_field = _get_annotated_field_meta(annotation)
-        description = (
-            annotated_field.description if annotated_field is not None else None
-        )
-
-        field_plans.append(
-            FieldPlan(
-                name=dc_field.name,
-                source=dc_field.name,
-                type_spec=type_spec,
-                func=func,
-                shape="self_only",
-                description=description,
-            )
-        )
+    field_plans = _build_dataclass_field_plans(cls, expect_input=False, is_root=is_root)
 
     # Resolver-backed fields (from @grommet.field sentinels)
     for attr_name, attr_value in vars(cls).items():
@@ -258,23 +286,6 @@ def _build_field_plans(
             annotation, expect_input=False, force_nullable=force_nullable
         )
 
-        args: list[ArgPlan] = []
-        for param, arg_annotation in _resolver_arg_info(attr_value.resolver):
-            if arg_annotation is inspect._empty:
-                continue
-            arg_force_nullable = param.default is not inspect._empty
-            arg_spec = _type_spec_from_annotation(
-                arg_annotation, expect_input=True, force_nullable=arg_force_nullable
-            )
-            arg_default = MISSING
-            if param.default is not inspect._empty:
-                arg_default = _default_value_for_annotation(
-                    arg_annotation, param.default
-                )
-            args.append(
-                ArgPlan(name=param.name, type_spec=arg_spec, default=arg_default)
-            )
-
         field_name = attr_value.name or attr_name
         info = _analyze_resolver(
             attr_value.resolver, kind=type_kind, field_name=field_name
@@ -289,49 +300,9 @@ def _build_field_plans(
                 arg_coercers=info.arg_coercers,
                 is_async=info.is_async,
                 is_async_gen=info.is_async_gen,
-                args=tuple(args),
+                args=info.args,
                 description=attr_value.description,
                 deprecation=attr_value.deprecation_reason,
-            )
-        )
-
-    return field_plans
-
-
-def _build_input_field_plans(cls: "pytype") -> list[FieldPlan]:
-    """Build FieldPlan for input type fields."""
-
-    field_plans: list[FieldPlan] = []
-    hints = get_annotations(cls)
-
-    for dc_field in dataclasses.fields(cls):
-        annotation = hints.get(dc_field.name, dc_field.type)
-        if is_hidden_field(dc_field.name, annotation):
-            continue
-
-        force_nullable = (
-            dc_field.default is not MISSING or dc_field.default_factory is not MISSING
-        )
-        type_spec = _type_spec_from_annotation(
-            annotation, expect_input=True, force_nullable=force_nullable
-        )
-
-        default_value = _input_field_default(dc_field, annotation)
-        field_default = default_value if default_value is not MISSING else NO_DEFAULT
-
-        # Extract description from Annotated Field metadata
-        annotated_field = _get_annotated_field_meta(annotation)
-        description = (
-            annotated_field.description if annotated_field is not None else None
-        )
-
-        field_plans.append(
-            FieldPlan(
-                name=dc_field.name,
-                source=dc_field.name,
-                type_spec=type_spec,
-                default=field_default,
-                description=description,
             )
         )
 

@@ -44,4 +44,13 @@ class TypeSpec:
     nullable: bool = False
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class ArgPlan:
+    """Planned argument for a resolver field."""
+
+    name: str
+    type_spec: TypeSpec
+    default: object = NO_DEFAULT
+
+
 _SCALARS = {str: "String", int: "Int", float: "Float", bool: "Boolean"}

@@ -519,8 +519,8 @@ mod parse {
                 py.run(
                     pyo3::ffi::c_str!(
                         r#"
-from grommet.plan import SchemaPlan, TypePlan, FieldPlan, ArgPlan
-from grommet.metadata import TypeKind, TypeSpec
+from grommet.plan import SchemaPlan, TypePlan, FieldPlan
+from grommet.metadata import ArgPlan, TypeKind, TypeSpec
 
 async def resolver(self):
     return 1

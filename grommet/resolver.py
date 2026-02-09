@@ -5,10 +5,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, get_origin
 
 from ._annotations import get_annotations
-from .coercion import _arg_coercer
+from .annotations import _type_spec_from_annotation
+from .coercion import _arg_coercer, _default_value_for_annotation
 from .context import Context
 from .errors import resolver_missing_annotation, resolver_requires_async
-from .metadata import TypeKind
+from .metadata import MISSING, ArgPlan, TypeKind
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -26,6 +27,7 @@ class ResolverResult:
     arg_coercers: list[tuple[str, "Callable[[Any], Any] | None"]]
     is_async: bool
     is_async_gen: bool
+    args: tuple[ArgPlan, ...] = ()
 
 
 def _resolver_params(resolver: "Callable[..., Any]") -> list[inspect.Parameter]:
@@ -157,11 +159,22 @@ def _analyze_resolver(
     arg_params = params[arg_start:]
 
     arg_coercers: list[tuple[str, "Callable[[Any], Any] | None"]] = []
+    arg_plans: list[ArgPlan] = []
     for param in arg_params:
         annotation = hints.get(param.name, param.annotation)
         if annotation is inspect._empty:
             raise resolver_missing_annotation(resolver_name, param.name)
         arg_coercers.append((param.name, _arg_coercer(annotation)))
+        arg_force_nullable = param.default is not inspect._empty
+        arg_spec = _type_spec_from_annotation(
+            annotation, expect_input=True, force_nullable=arg_force_nullable
+        )
+        arg_default: object = MISSING
+        if param.default is not inspect._empty:
+            arg_default = _default_value_for_annotation(annotation, param.default)
+        arg_plans.append(
+            ArgPlan(name=param.name, type_spec=arg_spec, default=arg_default)
+        )
 
     has_args = len(arg_coercers) > 0
     if has_context and has_args:
@@ -186,4 +199,5 @@ def _analyze_resolver(
         arg_coercers=arg_coercers,
         is_async=is_async,
         is_async_gen=is_asyncgen,
+        args=tuple(arg_plans),
     )
