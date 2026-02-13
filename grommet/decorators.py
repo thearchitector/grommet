@@ -22,19 +22,17 @@ _META_ATTR: str = "__grommet_meta__"
 
 
 class _FieldResolver:
-    __slots__ = ("resolver", "description", "deprecation_reason", "name")
+    __slots__ = ("resolver", "description", "name")
 
     def __init__(
         self,
         resolver: "Callable[..., Any]",
         *,
         description: str | None,
-        deprecation_reason: str | None,
         name: str | None,
     ) -> None:
         self.resolver = resolver
         self.description = description
-        self.deprecation_reason = deprecation_reason
         self.name = name
 
 
@@ -132,21 +130,13 @@ def input(
 
 @overload
 def field(
-    func: "Callable[P, R]",
-    *,
-    description: str | None = None,
-    deprecation_reason: str | None = None,
-    name: str | None = None,
+    func: "Callable[P, R]", *, description: str | None = None, name: str | None = None
 ) -> "_FieldResolver": ...
 
 
 @overload
 def field(
-    func: None = None,
-    *,
-    description: str | None = None,
-    deprecation_reason: str | None = None,
-    name: str | None = None,
+    func: None = None, *, description: str | None = None, name: str | None = None
 ) -> "Callable[[Callable[P, R]], _FieldResolver]": ...
 
 
@@ -154,7 +144,6 @@ def field(
     func: "Callable[..., Any] | None" = None,
     *,
     description: str | None = None,
-    deprecation_reason: str | None = None,
     name: str | None = None,
 ) -> "_FieldResolver | Callable[[Callable[..., Any]], _FieldResolver]":
     """Declares a resolver-backed field on a GraphQL type."""
@@ -168,12 +157,7 @@ def field(
             )
         if not callable(func):
             raise decorator_requires_callable()
-        return _FieldResolver(
-            func,
-            description=description,
-            deprecation_reason=deprecation_reason,
-            name=name,
-        )
+        return _FieldResolver(func, description=description, name=name)
 
     if func is None:
         return wrap

@@ -533,7 +533,7 @@ plan = SchemaPlan(
                       type_spec=TypeSpec(kind="named", name="Int", nullable=True),
                       func=resolver,
                       shape="self_only",
-                      arg_coercers=[],
+                      arg_names=[],
                       is_async=True,
                       is_async_gen=False,
                       args=(ArgPlan(name="limit",

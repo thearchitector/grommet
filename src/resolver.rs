@@ -170,13 +170,13 @@ fn call_resolver_sync(
             Ok(func.call1((parent, ctx_obj))?.unbind())
         }
         ResolverShape::SelfAndArgs => {
-            let kwargs = build_kwargs_with_coercion(py, ctx, &entry.arg_coercers)?;
+            let kwargs = build_kwargs(py, ctx, &entry.arg_names)?;
             Ok(func.call((parent,), Some(&kwargs))?.unbind())
         }
         ResolverShape::SelfContextAndArgs => {
             let cls = field_ctx.context_cls.as_ref().expect("context_cls missing");
             let ctx_obj = build_context_obj(py, ctx, state.as_ref(), cls)?;
-            let kwargs = build_kwargs_with_coercion(py, ctx, &entry.arg_coercers)?;
+            let kwargs = build_kwargs(py, ctx, &entry.arg_names)?;
             Ok(func.call((parent, ctx_obj), Some(&kwargs))?.unbind())
         }
     }
@@ -201,21 +201,17 @@ fn build_context_obj(
     Ok(context_obj.unbind())
 }
 
-fn build_kwargs_with_coercion<'py>(
+fn build_kwargs<'py>(
     py: Python<'py>,
     ctx: &ResolverContext<'_>,
-    coercers: &[(String, Option<PyObj>)],
+    arg_names: &[String],
 ) -> PyResult<Bound<'py, PyDict>> {
     let kwargs = PyDict::new(py);
-    for (name, coercer) in coercers {
+    for name in arg_names {
         let value = ctx.args.try_get(name.as_str());
         if let Ok(value) = value {
             let py_value = value_to_py(py, value.as_value())?;
-            let final_value = match coercer {
-                Some(c) => c.bind(py).call1((py_value,))?.unbind(),
-                None => py_value,
-            };
-            kwargs.set_item(name, final_value)?;
+            kwargs.set_item(name, py_value)?;
         }
     }
     Ok(kwargs)
@@ -242,13 +238,13 @@ fn call_resolver(
             Ok(func.call1((parent_obj, ctx_obj))?.unbind())
         }
         ResolverShape::SelfAndArgs => {
-            let kwargs = build_kwargs_with_coercion(py, ctx, &entry.arg_coercers)?;
+            let kwargs = build_kwargs(py, ctx, &entry.arg_names)?;
             Ok(func.call((parent_obj,), Some(&kwargs))?.unbind())
         }
         ResolverShape::SelfContextAndArgs => {
             let cls = field_ctx.context_cls.as_ref().expect("context_cls missing");
             let ctx_obj = build_context_obj(py, ctx, state, cls)?;
-            let kwargs = build_kwargs_with_coercion(py, ctx, &entry.arg_coercers)?;
+            let kwargs = build_kwargs(py, ctx, &entry.arg_names)?;
             Ok(func.call((parent_obj, ctx_obj), Some(&kwargs))?.unbind())
         }
     }

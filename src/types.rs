@@ -44,7 +44,6 @@ pub(crate) struct FieldDef {
     pub(crate) args: Vec<ArgDef>,
     pub(crate) resolver: Option<ResolverEntry>,
     pub(crate) description: Option<String>,
-    pub(crate) deprecation: Option<String>,
     pub(crate) default_value: Option<PyObj>,
 }
 
@@ -103,7 +102,7 @@ impl ResolverShape {
 pub(crate) struct ResolverEntry {
     pub(crate) func: PyObj,
     pub(crate) shape: ResolverShape,
-    pub(crate) arg_coercers: Vec<(String, Option<PyObj>)>,
+    pub(crate) arg_names: Vec<String>,
     pub(crate) is_async_gen: bool,
     pub(crate) is_async: bool,
 }

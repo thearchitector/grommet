@@ -70,7 +70,6 @@ fn parse_field_plan(
     let type_spec = item.getattr("type_spec")?;
     let type_ref = type_spec_to_type_ref(&type_spec)?;
     let description: Option<String> = item.getattr("description")?.extract()?;
-    let deprecation: Option<String> = item.getattr("deprecation")?.extract()?;
 
     let default_obj = item.getattr("default")?;
     let default_value = if default_obj.is(no_default) {
@@ -96,24 +95,12 @@ fn parse_field_plan(
         let is_async: bool = item.getattr("is_async")?.extract()?;
         let is_async_gen: bool = item.getattr("is_async_gen")?.extract()?;
 
-        let coercers_list: Vec<Py<PyAny>> = item.getattr("arg_coercers")?.extract()?;
-        let mut arg_coercers = Vec::with_capacity(coercers_list.len());
-        for coercer_item in &coercers_list {
-            let coercer_item = coercer_item.bind(py);
-            let coercer_name: String = coercer_item.get_item(0)?.extract()?;
-            let coercer_obj = coercer_item.get_item(1)?;
-            let coercer = if coercer_obj.is_none() {
-                None
-            } else {
-                Some(PyObj::new(coercer_obj.unbind()))
-            };
-            arg_coercers.push((coercer_name, coercer));
-        }
+        let arg_names: Vec<String> = item.getattr("arg_names")?.extract()?;
 
         Some(ResolverEntry {
             func: PyObj::new(func_obj.unbind()),
             shape,
-            arg_coercers,
+            arg_names,
             is_async,
             is_async_gen,
         })
@@ -125,7 +112,6 @@ fn parse_field_plan(
         args,
         resolver,
         description,
-        deprecation,
         default_value,
     })
 }

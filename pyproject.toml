@@ -20,6 +20,7 @@ license = "BSD-3-Clause-Clear"
 readme = "README.md"
 requires-python = ">=3.13,<4"
 dependencies = [
+    "noaio>=1.0.0",
     "typing-extensions~=4.15;python_version<'3.14'",
 ]
 

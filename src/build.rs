@@ -158,9 +158,6 @@ macro_rules! apply_metadata {
         if let Some(desc) = $def.description.as_ref() {
             f = f.description(desc.as_str());
         }
-        if let Some(dep) = $def.deprecation.as_ref() {
-            f = f.deprecation(Some(dep.as_str()));
-        }
         f
     }};
 }

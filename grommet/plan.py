@@ -35,15 +35,12 @@ class FieldPlan:
     type_spec: "TypeSpec"
     func: "Callable[..., Any] | None" = None
     shape: str | None = None
-    arg_coercers: list[tuple[str, "Callable[[Any], Any] | None"]] = dataclasses.field(
-        default_factory=list
-    )
+    arg_names: list[str] = dataclasses.field(default_factory=list)
     is_async: bool = False
     is_async_gen: bool = False
     args: tuple["ArgPlan", ...] = ()
     default: "Any" = NO_DEFAULT
     description: str | None = None
-    deprecation: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -297,12 +294,11 @@ def _build_field_plans(
                 type_spec=type_spec,
                 func=info.func,
                 shape=info.shape,
-                arg_coercers=info.arg_coercers,
+                arg_names=info.arg_names,
                 is_async=info.is_async,
                 is_async_gen=info.is_async_gen,
                 args=info.args,
                 description=attr_value.description,
-                deprecation=attr_value.deprecation_reason,
             )
         )
 

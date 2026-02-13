@@ -98,6 +98,7 @@ name = "grommet"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "noaio" },
     { name = "typing-extensions", marker = "python_full_version < '3.14'" },
 ]
 
@@ -115,7 +116,10 @@ perf = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "typing-extensions", marker = "python_full_version < '3.14'", specifier = "~=4.15" }]
+requires-dist = [
+    { name = "noaio", specifier = ">=1.0.0" },
+    { name = "typing-extensions", marker = "python_full_version < '3.14'", specifier = "~=4.15" },
+]
 
 [package.metadata.requires-dev]
 dev = [
@@ -233,6 +237,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a2/6e/371856a3fb9d31ca8dac321cda606860fa4548858c0cc45d9d1d4ca2628b/mypy_extensions-1.1.0.tar.gz", hash = "sha256:52e68efc3284861e772bbcd66823fde5ae21fd2fdb51c62a211403730b916558", size = 6343, upload-time = "2025-04-22T14:54:24.164Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl", hash = "sha256:1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505", size = 4963, upload-time = "2025-04-22T14:54:22.983Z" },
+]
+
+[[package]]
+name = "noaio"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/fa/cfc62a90486cf12b3234946d73aa69af70978855a3e35cf74b4f79ef6cb5/noaio-1.0.0.tar.gz", hash = "sha256:f4916adc504f9f7fac7edc377741c0c1ad637e10d4807688dd24c1f8fe9c6826", size = 2468, upload-time = "2026-02-10T21:50:48.931Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/11/e4/e4a5047b361e56790865da539ad88cb550b096b1656e64632fbd6579253d/noaio-1.0.0-py3-none-any.whl", hash = "sha256:71da8d2f1e78993085c5a85e8e6e1c24a9bec80c6ac74e3de6f1e2d1d7819567", size = 2907, upload-time = "2026-02-10T21:50:51.17Z" },
 ]
 
 [[package]]
