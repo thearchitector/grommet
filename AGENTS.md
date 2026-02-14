@@ -4,7 +4,7 @@
 
 - The user will use language and key words like ALWAYS, NEVER, SHOULD, alongside their negatives, to indicate the strictness with which to follow instructions. These correspond to RFC-2119 definitions. It is CRITICAL to adhere to these key words, and similar imperative language, when executing a task.
 - When the user asks you to complete a task, ALWAYS execute the task to completion. You should NEVER ask the user whether or not to proceed when continuing a task or following a plan.
-- If the user asks you to generate a plan, generate a new markdown file in the `ai_plans` directory, prefixing it with the next sequential plan number. Always use [PLAN_TEMPLATE.md](./ai_plans/PLAN_TEMPLATE.md) when creating or updating a plan.
+- If the user asks you to generate a plan, generate a new markdown file in the `ai_plans` directory, prefixing it with the next sequential plan number. Always use [PLAN_TEMPLATE.md](./ai_plans/PLAN_TEMPLATE.md) when creating or updating a plan, following the instructions at the top of that file.
 
 ## Development Guidelines
 - NEVER update files that include a `pragma: no ai` comment. These are authoritative files and should be used as anchors and sources of truth when making changes. ALWAYS validate changes against these authoritative files, executing tests against them or by extracting relevant code blocks to verify manually.
@@ -117,7 +117,3 @@ def hello(tomato: list["Any"]) -> str | None:
     """
     pass
 ```
-
-## Documentation
-
-When editing documentation, first scan the file for `<AI_GENERATED>` tags. If you find any, you MUST only edit the content between these tags. NEVER edit the content outside these tags.
