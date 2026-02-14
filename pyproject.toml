@@ -58,7 +58,7 @@ exclude_also = ["if TYPE_CHECKING:"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
-exclude = "^tests/|^scripts/|^benchmarks/|^examples/|^test\\.py$"
+exclude = "^tests/|^scripts/|^benchmarks/|^examples/|^dist/|^test\\.py$"
 
 [tool.ruff]
 target-version = "py313"

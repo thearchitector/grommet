@@ -2,14 +2,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_graphql::dynamic::Schema;
+use async_graphql::futures_util::lock::Mutex;
 use async_graphql::futures_util::stream::{BoxStream, StreamExt};
 use async_graphql::parser::{parse_query, types::OperationType};
 use async_graphql::{Request, Variables};
 use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
-use tokio::sync::Mutex;
 
-use crate::runtime::future_into_py;
 use crate::schema_types::{
     PyInputObject, PyObject, PySubscription, RegistrableType, register_schema,
 };
@@ -93,31 +92,26 @@ impl SchemaWrapper {
         Ok(self.schema.sdl())
     }
 
-    fn execute<'py>(
+    async fn execute(
         &self,
-        py: Python<'py>,
         query: String,
         variables: Option<Py<PyAny>>,
         state: Option<Py<PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<Py<PyAny>> {
         let is_sub = Self::is_subscription(&query);
         let request = Self::build_request(query, variables, state)?;
         let schema = self.schema.clone();
 
         if is_sub {
-            future_into_py(py, async move {
-                let stream = schema.execute_stream(request);
-                let sub_stream = SubscriptionStream {
-                    stream: Arc::new(Mutex::new(Some(stream))),
-                    closed: Arc::new(AtomicBool::new(false)),
-                };
-                Python::attach(|py| Ok(sub_stream.into_pyobject(py)?.into_any().unbind()))
-            })
+            let stream = schema.execute_stream(request);
+            let sub_stream = SubscriptionStream {
+                stream: Arc::new(Mutex::new(Some(stream))),
+                closed: Arc::new(AtomicBool::new(false)),
+            };
+            Python::attach(|py| Ok(sub_stream.into_pyobject(py)?.into_any().unbind()))
         } else {
-            future_into_py(py, async move {
-                let response = schema.execute(request).await;
-                Python::attach(|py| response_to_py(py, response))
-            })
+            let response = schema.execute(request).await;
+            Python::attach(|py| response_to_py(py, response))
         }
     }
 }
@@ -134,36 +128,31 @@ impl SubscriptionStream {
         slf
     }
 
-    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
-        if self.closed.load(Ordering::SeqCst) {
-            return Ok(None);
-        }
-        let stream = self.stream.clone();
-        let closed = self.closed.clone();
-        let awaitable = future_into_py(py, async move {
-            if closed.load(Ordering::SeqCst) {
-                return Err(PyErr::new::<PyStopAsyncIteration, _>(""));
-            }
-            let mut guard = stream.lock().await;
-            let Some(stream) = guard.as_mut() else {
-                return Err(PyErr::new::<PyStopAsyncIteration, _>(""));
-            };
-            match stream.next().await {
-                Some(response) => Python::attach(|py| response_to_py(py, response)),
-                None => Err(PyErr::new::<PyStopAsyncIteration, _>("")),
-            }
-        })?;
-        Ok(Some(awaitable))
+    fn __anext__<'py>(slf: PyRef<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
+        let py = slf.py();
+        let slf_obj: Py<Self> = slf.into();
+        slf_obj.bind(py).call_method0("_anext_impl")
     }
 
-    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let stream = self.stream.clone();
-        let closed = self.closed.clone();
-        future_into_py(py, async move {
-            closed.store(true, Ordering::SeqCst);
-            let mut guard = stream.lock().await;
-            *guard = None;
-            Ok(Python::attach(|py| py.None()))
-        })
+    #[pyo3(name = "_anext_impl")]
+    async fn anext_impl(&self) -> PyResult<Py<PyAny>> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(PyErr::new::<PyStopAsyncIteration, _>(""));
+        }
+        let mut guard = self.stream.lock().await;
+        let Some(stream) = guard.as_mut() else {
+            return Err(PyErr::new::<PyStopAsyncIteration, _>(""));
+        };
+        match stream.next().await {
+            Some(response) => Python::attach(|py| response_to_py(py, response)),
+            None => Err(PyErr::new::<PyStopAsyncIteration, _>("")),
+        }
+    }
+
+    async fn aclose(&self) -> PyResult<()> {
+        self.closed.store(true, Ordering::SeqCst);
+        let mut guard = self.stream.lock().await;
+        *guard = None;
+        Ok(())
     }
 }

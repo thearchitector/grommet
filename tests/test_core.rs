@@ -66,10 +66,6 @@ mod errors {
     }
 }
 
-mod runtime {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/runtime.rs"));
-}
-
 mod types {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/types.rs"));
 }
@@ -414,6 +410,7 @@ mod resolver {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use std::task::{Context, Poll, Waker};
 
         /// Verifies interned-string getattr reads attributes and falls back to None.
         #[test]
@@ -448,10 +445,14 @@ empty = Obj.__new__(type('Empty', (), {}))
             });
         }
 
-        /// Ensures into_future resolves Python awaitables into concrete values.
+        fn noop_waker() -> Waker {
+            Waker::noop().clone()
+        }
+
+        /// Ensures custom awaitable bridge reports missing event loop errors.
         #[test]
-        fn into_future_waits_for_coroutine() {
-            let awaitable = crate::with_py(|py| {
+        fn awaitable_bridge_requires_running_loop() {
+            let mut future = crate::with_py(|py| {
                 let locals = PyDict::new(py);
                 py.run(
                     pyo3::ffi::c_str!(
@@ -466,19 +467,48 @@ async def coro():
                 )
                 .unwrap();
                 let coro = locals.get_item("coro").unwrap().unwrap();
-                coro.call0().unwrap().unbind()
+                let awaitable = coro.call0().unwrap();
+                awaitable_into_future(awaitable)
             });
-            let awaited = crate::with_py(|py| {
-                pyo3_async_runtimes::tokio::run(py, async move {
-                    let future = Python::attach(|py| {
-                        pyo3_async_runtimes::tokio::into_future(awaitable.into_bound(py))
-                    })?;
-                    future.await
-                })
-            })
-            .unwrap();
-            let value = crate::with_py(|py| awaited.bind(py).extract::<i64>().unwrap());
-            assert_eq!(value, 7);
+
+            let waker = noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            assert!(matches!(future.as_mut().poll(&mut cx), Poll::Pending));
+            match future.as_mut().poll(&mut cx) {
+                Poll::Ready(Err(err)) => {
+                    let message = crate::with_py(|py| {
+                        err.value(py).str().unwrap().to_str().unwrap().to_string()
+                    });
+                    assert!(
+                        message.to_ascii_lowercase().contains("event loop"),
+                        "unexpected error: {message}"
+                    );
+                }
+                _ => panic!("expected missing running event loop error"),
+            }
+        }
+
+        /// Ensures async-iterator detection accepts objects with __anext__.
+        #[test]
+        fn subscription_iterator_accepts_anext_only_object() {
+            crate::with_py(|py| {
+                let locals = PyDict::new(py);
+                py.run(
+                    pyo3::ffi::c_str!(
+                        r#"
+class IterOnly:
+    async def __anext__(self):
+        return 1
+"#
+                    ),
+                    None,
+                    Some(&locals),
+                )
+                .unwrap();
+                let cls = locals.get_item("IterOnly").unwrap().unwrap();
+                let value = cls.call0().unwrap();
+                let _ = subscription_iterator(&value).unwrap();
+            });
         }
     }
 }

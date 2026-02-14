@@ -10,9 +10,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 async-graphql = { version = "7.2.1", default-features = false, features = ["dynamic-schema"] }
 indexmap = "2"
-pyo3 = "0.28.0"
-pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime", "unstable-streams"] }
-tokio = { version = "1.49", features = ["sync", "rt-multi-thread"] }
+pyo3 = { version = "0.28.0", features = ["experimental-async"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }

@@ -1,13 +1,14 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 
 use async_graphql::Error;
 use async_graphql::dynamic::{FieldValue, ResolverContext, TypeRef};
-use async_graphql::futures_util::stream::{BoxStream, StreamExt};
+use async_graphql::futures_util::stream::{self, BoxStream, StreamExt};
+use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyDict};
-use pyo3_async_runtimes::tokio;
+use pyo3::types::{PyAnyMethods, PyCFunction, PyDict, PyTupleMethods};
 
 use crate::errors::{py_err_to_error, subscription_requires_async_iterator};
 use crate::lookahead::extract_graph;
@@ -15,6 +16,130 @@ use crate::types::{FieldContext, PyObj, ResolverEntry, ResolverShape, StateValue
 use crate::values::{py_to_field_value_for_type, value_to_py};
 
 type BoxFut = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
+
+struct AwaitableState {
+    started: bool,
+    task: Option<Py<PyAny>>,
+    result: Option<PyResult<Py<PyAny>>>,
+    waker: Option<Waker>,
+}
+
+struct PythonAwaitableFuture {
+    awaitable: Py<PyAny>,
+    state: Arc<Mutex<AwaitableState>>,
+}
+
+impl PythonAwaitableFuture {
+    fn new(awaitable: Py<PyAny>) -> Self {
+        Self {
+            awaitable,
+            state: Arc::new(Mutex::new(AwaitableState {
+                started: false,
+                task: None,
+                result: None,
+                waker: None,
+            })),
+        }
+    }
+
+    fn start(&self) -> PyResult<()> {
+        let callback_state = Arc::clone(&self.state);
+
+        let task = Python::attach(|py| -> PyResult<Py<PyAny>> {
+            let asyncio = py.import("asyncio")?;
+            let task = match asyncio.call_method1("ensure_future", (self.awaitable.bind(py),)) {
+                Ok(task) => task,
+                Err(err) => {
+                    let _ = self.awaitable.bind(py).call_method0("close");
+                    return Err(err);
+                }
+            };
+            let callback = PyCFunction::new_closure(
+                py,
+                Some(c"grommet_awaitable_done"),
+                None,
+                move |args, _kwargs| -> PyResult<()> {
+                    let task = args.get_item(0)?;
+                    let result = if task.call_method0("cancelled")?.is_truthy()? {
+                        let cancelled = task
+                            .py()
+                            .import("asyncio")?
+                            .getattr("CancelledError")?
+                            .call0()?;
+                        Err(PyErr::from_value(cancelled))
+                    } else {
+                        match task.call_method0("result") {
+                            Ok(value) => Ok(value.unbind()),
+                            Err(err) => Err(err),
+                        }
+                    };
+
+                    let mut shared = callback_state.lock().expect("awaitable state poisoned");
+                    shared.task = None;
+                    shared.result = Some(result);
+                    if let Some(waker) = shared.waker.take() {
+                        waker.wake();
+                    }
+                    Ok(())
+                },
+            )?;
+            task.call_method1("add_done_callback", (callback,))?;
+            Ok(task.unbind())
+        })?;
+
+        let mut shared = self.state.lock().expect("awaitable state poisoned");
+        shared.task = Some(task);
+        Ok(())
+    }
+}
+
+impl Future for PythonAwaitableFuture {
+    type Output = PyResult<Py<PyAny>>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let should_start = {
+            let mut shared = self.state.lock().expect("awaitable state poisoned");
+            if let Some(result) = shared.result.take() {
+                return Poll::Ready(result);
+            }
+            shared.waker = Some(cx.waker().clone());
+            if shared.started {
+                false
+            } else {
+                shared.started = true;
+                true
+            }
+        };
+
+        if should_start && let Err(err) = self.start() {
+            let mut shared = self.state.lock().expect("awaitable state poisoned");
+            shared.result = Some(Err(err));
+            if let Some(waker) = shared.waker.take() {
+                waker.wake();
+            }
+        }
+
+        Poll::Pending
+    }
+}
+
+impl Drop for PythonAwaitableFuture {
+    fn drop(&mut self) {
+        let task = {
+            let mut shared = self.state.lock().expect("awaitable state poisoned");
+            shared.task.take()
+        };
+        if let Some(task) = task {
+            Python::attach(|py| {
+                let _ = task.bind(py).call_method0("cancel");
+            });
+        }
+    }
+}
+
+fn awaitable_into_future(awaitable: Bound<'_, PyAny>) -> BoxFut {
+    Box::pin(PythonAwaitableFuture::new(awaitable.unbind()))
+}
 
 // Synchronous fast-path for all sync fields (data fields via attrgetter and sync resolvers).
 // Single GIL block: call func + convert. No async overhead, no task scheduling.
@@ -69,20 +194,35 @@ fn subscription_stream<'a>(
     iterator: PyObj,
     output_type: TypeRef,
 ) -> Result<BoxStream<'a, Result<FieldValue<'a>, Error>>, Error> {
-    let stream =
-        Python::attach(|py| tokio::into_stream_v1(iterator.bind(py))).map_err(py_err_to_error)?;
-    let stream = stream.map(move |item| match item {
-        Ok(value) => {
-            let value = match Python::attach(|py| {
-                py_to_field_value_for_type(py, value.bind(py), &output_type)
-            }) {
-                Ok(value) => value,
-                Err(err) => return Err(py_err_to_error(err)),
-            };
-            let value: FieldValue<'a> = value;
-            Ok(value)
+    let stream = stream::try_unfold(iterator, move |iterator| {
+        let output_type = output_type.clone();
+        async move {
+            let next_fut: BoxFut = Python::attach(|py| {
+                let anext = iterator.bind(py).call_method0("__anext__")?;
+                Ok(awaitable_into_future(anext))
+            })
+            .map_err(py_err_to_error)?;
+
+            match next_fut.await {
+                Ok(value) => {
+                    let value = Python::attach(|py| {
+                        py_to_field_value_for_type(py, value.bind(py), &output_type)
+                    })
+                    .map_err(py_err_to_error)?;
+                    let value: FieldValue<'a> = value;
+                    Ok(Some((value, iterator)))
+                }
+                Err(err) => {
+                    let is_stop =
+                        Python::attach(|py| err.is_instance_of::<PyStopAsyncIteration>(py));
+                    if is_stop {
+                        Ok(None)
+                    } else {
+                        Err(py_err_to_error(err))
+                    }
+                }
+            }
         }
-        Err(err) => Err(py_err_to_error(err)),
     });
 
     Ok(stream.boxed())
@@ -119,8 +259,7 @@ async fn resolve_with_resolver(
             let coroutine =
                 call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())?;
             let bound = coroutine.into_bound(py);
-            let fut = tokio::into_future(bound)?;
-            Ok(Box::pin(fut) as BoxFut)
+            Ok(awaitable_into_future(bound))
         })
         .map_err(py_err_to_error)?;
         future.await.map_err(py_err_to_error)
