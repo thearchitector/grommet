@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyBytes, PyDict, PyList, PyTuple};
 
 use crate::errors::{expected_list_value, py_value_error, unsupported_value_type};
-use crate::types::{PyObj, ScalarHint};
+use crate::types::PyObj;
 
 #[pyclass(module = "grommet._core", name = "OperationResult")]
 pub(crate) struct OperationResult {
@@ -74,35 +74,14 @@ pub(crate) fn py_to_field_value_for_type(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
     output_type: &TypeRef,
-    hint: ScalarHint,
 ) -> PyResult<FieldValue<'static>> {
     if value.is_none() {
         return Ok(FieldValue::value(Value::Null));
     }
     match output_type {
-        TypeRef::NonNull(inner) => py_to_field_value_for_type(py, value, inner, hint),
-        TypeRef::List(inner) => convert_sequence_to_field_values(py, value, inner, hint),
-        TypeRef::Named(_name) => py_to_field_value_hinted(py, value, hint),
-    }
-}
-
-fn py_to_field_value_hinted(
-    py: Python<'_>,
-    value: &Bound<'_, PyAny>,
-    hint: ScalarHint,
-) -> PyResult<FieldValue<'static>> {
-    if value.is_none() {
-        return Ok(FieldValue::value(Value::Null));
-    }
-    match hint {
-        ScalarHint::String | ScalarHint::ID => {
-            Ok(FieldValue::value(Value::String(value.extract()?)))
-        }
-        ScalarHint::Int => Ok(FieldValue::value(Value::from(value.extract::<i64>()?))),
-        ScalarHint::Float => Ok(FieldValue::value(Value::from(value.extract::<f64>()?))),
-        ScalarHint::Boolean => Ok(FieldValue::value(Value::Boolean(value.extract()?))),
-        ScalarHint::Object => Ok(FieldValue::owned_any(PyObj::new(value.clone().unbind()))),
-        ScalarHint::Unknown => py_to_field_value(py, value),
+        TypeRef::NonNull(inner) => py_to_field_value_for_type(py, value, inner),
+        TypeRef::List(inner) => convert_sequence_to_field_values(py, value, inner),
+        TypeRef::Named(_name) => py_to_field_value(py, value),
     }
 }
 
@@ -153,10 +132,9 @@ fn convert_sequence_to_field_values(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
     inner_type: &TypeRef,
-    hint: ScalarHint,
 ) -> PyResult<FieldValue<'static>> {
     let items = collect_sequence(value, |item| {
-        py_to_field_value_for_type(py, item, inner_type, hint)
+        py_to_field_value_for_type(py, item, inner_type)
     })?;
     Ok(FieldValue::list(items))
 }

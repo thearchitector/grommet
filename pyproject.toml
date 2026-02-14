@@ -71,6 +71,7 @@ extend-ignore = ["UP037"]
 
 [tool.ruff.lint.per-file-ignores]
 "{tests,benchmarks}/**" = ["TC", "F811"]
+"grommet/decorators.py" = ["PLR0913"]
 
 [tool.ruff.lint.flake8-type-checking]
 strict = true

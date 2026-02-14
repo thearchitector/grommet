@@ -266,32 +266,24 @@ Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
                 let list_ref = TypeRef::List(Box::new(TypeRef::named("String")));
                 let list = PyList::new(py, ["a", "b"]).unwrap();
                 let list_any = list.into_any();
-                let _ = py_to_field_value_for_type(py, &list_any, &list_ref, ScalarHint::Unknown)
-                    .unwrap();
+                let _ = py_to_field_value_for_type(py, &list_any, &list_ref).unwrap();
                 let tuple_any = ("a", "b").into_pyobject(py).unwrap().into_any();
-                let _ = py_to_field_value_for_type(py, &tuple_any, &list_ref, ScalarHint::Unknown)
-                    .unwrap();
+                let _ = py_to_field_value_for_type(py, &tuple_any, &list_ref).unwrap();
 
                 let int_any = PyInt::new(py, 42).into_any();
-                let err = py_to_field_value_for_type(py, &int_any, &list_ref, ScalarHint::Unknown)
+                let err = py_to_field_value_for_type(py, &int_any, &list_ref)
                     .expect_err("expected list error");
                 let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
                 assert_eq!(msg, "Expected list for GraphQL list type");
 
                 let non_null = TypeRef::NonNull(Box::new(TypeRef::named("String")));
                 let ok_any = "ok".into_pyobject(py).unwrap().into_any();
-                let _ = py_to_field_value_for_type(py, &ok_any, &non_null, ScalarHint::Unknown)
-                    .unwrap();
+                let _ = py_to_field_value_for_type(py, &ok_any, &non_null).unwrap();
 
                 let none_obj = py.None();
                 let none_any = none_obj.bind(py);
-                let _ = py_to_field_value_for_type(
-                    py,
-                    &none_any,
-                    &TypeRef::named("String"),
-                    ScalarHint::Unknown,
-                )
-                .unwrap();
+                let _ =
+                    py_to_field_value_for_type(py, &none_any, &TypeRef::named("String")).unwrap();
             });
         }
 
@@ -375,20 +367,13 @@ Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
 
                 // Test list conversion with type
                 let list = PyList::new(py, ["a", "b"]).unwrap();
-                let result = convert_sequence_to_field_values(
-                    py,
-                    &list.into_any(),
-                    &inner_type,
-                    ScalarHint::Unknown,
-                )
-                .unwrap();
+                let result =
+                    convert_sequence_to_field_values(py, &list.into_any(), &inner_type).unwrap();
                 let _ = result;
 
                 // Test tuple conversion with type
                 let tuple = ("x", "y").into_pyobject(py).unwrap().into_any();
-                let result =
-                    convert_sequence_to_field_values(py, &tuple, &inner_type, ScalarHint::Unknown)
-                        .unwrap();
+                let result = convert_sequence_to_field_values(py, &tuple, &inner_type).unwrap();
                 let _ = result;
 
                 // Test untyped list conversion
@@ -404,13 +389,8 @@ Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
 
                 // Test error case: non-sequence passed to typed converter
                 let int_obj = PyInt::new(py, 42).into_any();
-                let err = convert_sequence_to_field_values(
-                    py,
-                    &int_obj,
-                    &inner_type,
-                    ScalarHint::Unknown,
-                )
-                .expect_err("should error for non-list");
+                let err = convert_sequence_to_field_values(py, &int_obj, &inner_type)
+                    .expect_err("should error for non-list");
                 let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
                 assert_eq!(msg, "Expected list for GraphQL list type");
 
@@ -499,68 +479,6 @@ async def coro():
             .unwrap();
             let value = crate::with_py(|py| awaited.bind(py).extract::<i64>().unwrap());
             assert_eq!(value, 7);
-        }
-    }
-}
-
-mod parse {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/parse.rs"));
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use pyo3::types::PyDict;
-
-        /// Verifies parse_schema_plan extracts plan dataclass attributes correctly.
-        #[test]
-        fn parse_schema_plan_round_trip() {
-            crate::with_py(|py| {
-                let locals = PyDict::new(py);
-                py.run(
-                    pyo3::ffi::c_str!(
-                        r#"
-from grommet.plan import SchemaPlan, TypePlan, FieldPlan
-from grommet.metadata import ArgPlan, TypeKind, TypeSpec
-
-async def resolver(self):
-    return 1
-
-plan = SchemaPlan(
-    query="Query", mutation=None, subscription=None,
-    types=(
-        TypePlan(kind=TypeKind.OBJECT, name="Query", cls=object, fields=(
-            FieldPlan(name="value", source="value",
-                      type_spec=TypeSpec(kind="named", name="Int", nullable=True),
-                      func=resolver,
-                      shape="self_only",
-                      arg_names=[],
-                      is_async=True,
-                      is_async_gen=False,
-                      args=(ArgPlan(name="limit",
-                                    type_spec=TypeSpec(kind="named", name="Int", nullable=True),
-                                    default=10),)),
-        )),
-    ),
-)
-"#
-                    ),
-                    None,
-                    Some(&locals),
-                )
-                .unwrap();
-
-                let plan = locals.get_item("plan").unwrap().unwrap();
-                let (schema_def, type_defs) = parse_schema_plan(py, &plan).unwrap();
-                assert_eq!(schema_def.query, "Query");
-                assert_eq!(type_defs.len(), 1);
-                assert_eq!(type_defs[0].name, "Query");
-                assert_eq!(type_defs[0].fields[0].name, "value");
-                assert_eq!(type_defs[0].fields[0].args[0].name, "limit");
-                assert!(type_defs[0].fields[0].args[0].default_value.is_some());
-                let resolver = type_defs[0].fields[0].resolver.as_ref().unwrap();
-                assert!(resolver.is_async);
-                assert!(!resolver.is_async_gen);
-            });
         }
     }
 }

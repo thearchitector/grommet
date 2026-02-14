@@ -1,3 +1,4 @@
+# pragma: no ai
 import sys
 from typing import TYPE_CHECKING
 

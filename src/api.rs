@@ -9,9 +9,10 @@ use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
 use tokio::sync::Mutex;
 
-use crate::build::build_schema;
-use crate::parse::parse_schema_plan;
 use crate::runtime::future_into_py;
+use crate::schema_types::{
+    PyInputObject, PyObject, PySubscription, RegistrableType, register_schema,
+};
 use crate::types::{PyObj, StateValue};
 use crate::values::{py_to_value, response_to_py};
 
@@ -64,9 +65,25 @@ impl SchemaWrapper {
 #[pymethods]
 impl SchemaWrapper {
     #[new]
-    fn new(py: Python, plan: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let (schema_def, type_defs) = parse_schema_plan(py, plan)?;
-        let schema = build_schema(schema_def, type_defs)?;
+    fn new(py: Python, bundle: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let query: String = bundle.getattr("query")?.extract()?;
+        let mutation: Option<String> = bundle.getattr("mutation")?.extract()?;
+        let subscription: Option<String> = bundle.getattr("subscription")?.extract()?;
+        let types_list: Vec<Py<PyAny>> = bundle.getattr("types")?.extract()?;
+
+        let mut types = Vec::with_capacity(types_list.len());
+        for item in &types_list {
+            let bound = item.bind(py);
+            if let Ok(cell) = bound.cast::<PyObject>() {
+                types.push(RegistrableType::Object(cell.borrow_mut().consume()));
+            } else if let Ok(cell) = bound.cast::<PyInputObject>() {
+                types.push(RegistrableType::InputObject(cell.borrow_mut().consume()));
+            } else if let Ok(cell) = bound.cast::<PySubscription>() {
+                types.push(RegistrableType::Subscription(cell.borrow_mut().consume()));
+            }
+        }
+
+        let schema = register_schema(&query, mutation.as_deref(), subscription.as_deref(), types)?;
         Ok(SchemaWrapper {
             schema: Arc::new(schema),
         })

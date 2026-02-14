@@ -16,7 +16,7 @@ class SubQuery:
 @grommet.type
 @dataclass
 class Subscription:
-    @grommet.field
+    @grommet.subscription
     async def counter(self, limit: int) -> AsyncIterator[int]:
         for i in range(limit):
             yield i

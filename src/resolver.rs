@@ -11,7 +11,7 @@ use pyo3_async_runtimes::tokio;
 
 use crate::errors::{py_err_to_error, subscription_requires_async_iterator};
 use crate::lookahead::extract_graph;
-use crate::types::{FieldContext, PyObj, ResolverEntry, ResolverShape, ScalarHint, StateValue};
+use crate::types::{FieldContext, PyObj, ResolverEntry, ResolverShape, StateValue};
 use crate::values::{py_to_field_value_for_type, value_to_py};
 
 type BoxFut = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
@@ -25,12 +25,7 @@ pub(crate) fn resolve_field_sync_fast<'a>(
     let entry = field_ctx.resolver.as_ref().expect("resolver missing");
     Python::attach(|py| {
         let result = call_resolver_sync(py, ctx, field_ctx, entry)?;
-        py_to_field_value_for_type(
-            py,
-            result.bind(py),
-            &field_ctx.output_type,
-            field_ctx.scalar_hint,
-        )
+        py_to_field_value_for_type(py, result.bind(py), &field_ctx.output_type)
     })
     .map_err(py_err_to_error)
 }
@@ -42,11 +37,9 @@ pub(crate) async fn resolve_field(
 ) -> Result<Option<FieldValue<'_>>, Error> {
     let entry = field_ctx.resolver.as_ref().expect("resolver missing");
     let value = resolve_with_resolver(&ctx, &field_ctx, entry).await?;
-    let hint = field_ctx.scalar_hint;
-    let field_value = Python::attach(|py| {
-        py_to_field_value_for_type(py, value.bind(py), &field_ctx.output_type, hint)
-    })
-    .map_err(py_err_to_error)?;
+    let field_value =
+        Python::attach(|py| py_to_field_value_for_type(py, value.bind(py), &field_ctx.output_type))
+            .map_err(py_err_to_error)?;
     Ok(Some(field_value))
 }
 
@@ -58,11 +51,7 @@ pub(crate) async fn resolve_subscription_stream<'a>(
     let value = resolve_with_resolver(&ctx, &field_ctx, entry).await?;
     let iterator =
         Python::attach(|py| subscription_iterator(value.bind(py))).map_err(py_err_to_error)?;
-    subscription_stream(
-        iterator,
-        field_ctx.output_type.clone(),
-        field_ctx.scalar_hint,
-    )
+    subscription_stream(iterator, field_ctx.output_type.clone())
 }
 
 fn subscription_iterator(value_ref: &Bound<'_, PyAny>) -> PyResult<PyObj> {
@@ -79,14 +68,13 @@ fn subscription_iterator(value_ref: &Bound<'_, PyAny>) -> PyResult<PyObj> {
 fn subscription_stream<'a>(
     iterator: PyObj,
     output_type: TypeRef,
-    hint: ScalarHint,
 ) -> Result<BoxStream<'a, Result<FieldValue<'a>, Error>>, Error> {
     let stream =
         Python::attach(|py| tokio::into_stream_v1(iterator.bind(py))).map_err(py_err_to_error)?;
     let stream = stream.map(move |item| match item {
         Ok(value) => {
             let value = match Python::attach(|py| {
-                py_to_field_value_for_type(py, value.bind(py), &output_type, hint)
+                py_to_field_value_for_type(py, value.bind(py), &output_type)
             }) {
                 Ok(value) => value,
                 Err(err) => return Err(py_err_to_error(err)),

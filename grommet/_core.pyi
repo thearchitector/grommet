@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 from typing import Any
 
-from .plan import SchemaPlan
+from .metadata import TypeSpec
 
 class OperationResult:
     """Result of a GraphQL operation with data, errors, and extensions."""
@@ -13,7 +13,7 @@ class OperationResult:
     def __getitem__(self, key: str) -> Any: ...
 
 class Schema:
-    def __init__(self, plan: SchemaPlan) -> None: ...
+    def __init__(self, bundle: Any) -> None: ...
     async def execute(
         self, query: str, variables: dict[str, Any] | None = None, state: Any = None
     ) -> OperationResult | SubscriptionStream: ...
@@ -27,3 +27,61 @@ class SubscriptionStream:
 class Graph:
     def requests(self, name: str) -> bool: ...
     def peek(self, name: str) -> Graph: ...
+
+class Field:
+    def __init__(
+        self,
+        name: str,
+        type_spec: TypeSpec,
+        func: Any,
+        shape: str,
+        arg_names: list[str],
+        is_async: bool,
+        description: str | None = None,
+        args: list[tuple[str, TypeSpec, Any | None]] | None = None,
+    ) -> None: ...
+
+class SubscriptionField:
+    def __init__(
+        self,
+        name: str,
+        type_spec: TypeSpec,
+        func: Any,
+        shape: str,
+        arg_names: list[str],
+        description: str | None = None,
+        args: list[tuple[str, TypeSpec, Any | None]] | None = None,
+    ) -> None: ...
+
+class InputValue:
+    def __init__(
+        self,
+        name: str,
+        type_spec: TypeSpec,
+        default_value: Any | None = None,
+        description: str | None = None,
+    ) -> None: ...
+
+class Object:
+    def __init__(
+        self,
+        name: str,
+        description: str | None = None,
+        fields: list[Field] | None = None,
+    ) -> None: ...
+
+class InputObject:
+    def __init__(
+        self,
+        name: str,
+        description: str | None = None,
+        fields: list[InputValue] | None = None,
+    ) -> None: ...
+
+class Subscription:
+    def __init__(
+        self,
+        name: str,
+        description: str | None = None,
+        fields: list[SubscriptionField] | None = None,
+    ) -> None: ...
