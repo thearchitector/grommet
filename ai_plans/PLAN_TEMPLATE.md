@@ -26,19 +26,9 @@ NEVER include these instructions in the output.
 
 Short description of the project, outling the major objectives tackled by all the sections below.
 
-## 1) Goal 1 [ ]
+## 1) Phase 1: Some Goal
 
-### Rationale
-
-Rationale describing the desired impact. This should be used to guide your own context and process, like a self-prompt for direction and re-alignment.
-
-### Tasks
-
-Description of the approach to the work, what it will touch, and the changes that must be made. Use this section to outline your concrete subtasks. Use the following format:
+Description of the approach to the work and the changes that must be made. Use this section to outline your concrete subtasks. Use the following format:
 
 - [ ] Subtask A description and details
 - [ ] Subtask B description and details
-
-### Implementation Notes
-
-Any additional notes about the implementation, such as dependencies or edge cases that require consideration. Use this to outline references or other information that will be helpful for you to refer back to when implementing the above subtasks. This section should be concrete and used to supplement the tasks above when necessary, not correct or contradict them.
