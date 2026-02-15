@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_graphql::dynamic::TypeRef;
 use pyo3::prelude::*;
 
 #[derive(Clone)]
@@ -26,35 +27,10 @@ impl PyObj {
 #[derive(Clone)]
 pub(crate) struct StateValue(pub(crate) PyObj);
 
-use async_graphql::dynamic::TypeRef;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ResolverShape {
-    SelfOnly,
-    SelfAndContext,
-    SelfAndArgs,
-    SelfContextAndArgs,
-}
-
-impl ResolverShape {
-    pub(crate) fn from_str(s: &str) -> PyResult<Self> {
-        match s {
-            "self_only" => Ok(ResolverShape::SelfOnly),
-            "self_and_context" => Ok(ResolverShape::SelfAndContext),
-            "self_and_args" => Ok(ResolverShape::SelfAndArgs),
-            "self_context_and_args" => Ok(ResolverShape::SelfContextAndArgs),
-            _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Unknown resolver shape: {s}"
-            ))),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct ResolverEntry {
     pub(crate) func: PyObj,
-    pub(crate) shape: ResolverShape,
-    pub(crate) arg_names: Vec<String>,
+    pub(crate) needs_context: bool,
     pub(crate) is_async_gen: bool,
 }
 

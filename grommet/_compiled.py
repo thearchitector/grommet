@@ -29,6 +29,7 @@ class CompiledResolverField:
     kind: "Literal['field', 'subscription']"
     name: str
     func: "Callable[..., Any]"
+    needs_context: bool
     shape: str
     arg_names: tuple[str, ...]
     is_async: bool
@@ -98,8 +99,7 @@ def instantiate_core_type(compiled_type: CompiledType) -> "Any":
                 field.name,
                 field.type_spec,
                 field.func,
-                field.shape,
-                list(field.arg_names),
+                field.needs_context,
                 field.description,
                 _core_args(field.args),
             )
@@ -117,8 +117,7 @@ def instantiate_core_type(compiled_type: CompiledType) -> "Any":
                     field.name,
                     field.type_spec,
                     field.resolver_func,
-                    "self_only",
-                    [],
+                    False,
                     False,
                     field.description,
                 )
@@ -130,8 +129,7 @@ def instantiate_core_type(compiled_type: CompiledType) -> "Any":
                 field.name,
                 field.type_spec,
                 field.func,
-                field.shape,
-                list(field.arg_names),
+                field.needs_context,
                 field.is_async,
                 field.description,
                 _core_args(field.args),

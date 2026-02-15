@@ -1,6 +1,7 @@
 """Tests for resolver compilation and decorator-time schema metadata."""
 
 import asyncio
+import dataclasses
 import inspect
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -10,12 +11,14 @@ from noaio import can_syncify, syncify
 
 import grommet
 import grommet.annotations as annotations_module
+from grommet import _core
 from grommet._compiled import (
     COMPILED_RESOLVER_ATTR,
     COMPILED_TYPE_ATTR,
     CompiledResolverField,
     CompiledType,
 )
+from grommet.metadata import TypeSpec
 
 
 async def _await_free(self):
@@ -110,9 +113,10 @@ def test_field_decorator_compiles_resolver_metadata():
     assert isinstance(compiled, CompiledResolverField)
     assert compiled.kind == "field"
     assert compiled.shape == "self_only"
+    assert compiled.needs_context is False
     assert compiled.is_async is False
     assert compiled.func is not resolver
-    assert compiled.func(None) == 1
+    assert compiled.func(None, None, {}) == 1
 
 
 def test_field_decorator_keeps_async_with_await():
@@ -129,8 +133,10 @@ def test_field_decorator_keeps_async_with_await():
 
 
 def test_field_decorator_accepts_sync_resolver():
+    expected = 42
+
     def resolver(self) -> int:
-        return 42
+        return expected
 
     result = grommet.field(resolver)
     compiled = getattr(result, COMPILED_RESOLVER_ATTR)
@@ -138,7 +144,8 @@ def test_field_decorator_accepts_sync_resolver():
     assert isinstance(compiled, CompiledResolverField)
     assert compiled.kind == "field"
     assert compiled.is_async is False
-    assert compiled.func is resolver
+    assert compiled.func is not resolver
+    assert compiled.func(None, None, {}) == expected
 
 
 def test_subscription_decorator_requires_async_generator():
@@ -160,7 +167,54 @@ def test_subscription_decorator_compiles_resolver_metadata():
     assert isinstance(compiled, CompiledResolverField)
     assert compiled.kind == "subscription"
     assert compiled.shape == "self_and_args"
+    assert compiled.needs_context is False
     assert compiled.is_async is True
+
+
+def test_compiled_adapter_handles_all_call_modes():
+    seen: list[tuple[str, object, object, object]] = []
+
+    @grommet.field
+    async def self_only(self) -> str:
+        seen.append(("self_only", self, None, None))
+        return "ok"
+
+    @grommet.field
+    async def self_and_context(self, context: grommet.Context) -> str:
+        seen.append(("self_and_context", self, context, None))
+        return "ok"
+
+    @grommet.field
+    async def self_and_args(self, value: int) -> str:
+        seen.append(("self_and_args", self, None, value))
+        return "ok"
+
+    @grommet.field
+    async def self_context_and_args(self, context: grommet.Context, value: int) -> str:
+        seen.append(("self_context_and_args", self, context, value))
+        return "ok"
+
+    self_only_compiled = getattr(self_only, COMPILED_RESOLVER_ATTR)
+    self_only_compiled.func("parent", object(), {"value": 1})
+
+    self_and_context_compiled = getattr(self_and_context, COMPILED_RESOLVER_ATTR)
+    context_obj = object()
+    self_and_context_compiled.func("parent", context_obj, {"value": 1})
+
+    self_and_args_compiled = getattr(self_and_args, COMPILED_RESOLVER_ATTR)
+    self_and_args_compiled.func("parent", object(), {"value": 3})
+
+    self_context_and_args_compiled = getattr(
+        self_context_and_args, COMPILED_RESOLVER_ATTR
+    )
+    self_context_and_args_compiled.func("parent", context_obj, {"value": 7})
+
+    assert seen == [
+        ("self_only", "parent", None, None),
+        ("self_and_context", "parent", context_obj, None),
+        ("self_and_args", "parent", None, 3),
+        ("self_context_and_args", "parent", context_obj, 7),
+    ]
 
 
 @grommet.type
@@ -253,6 +307,64 @@ def test_same_compiled_type_supports_multiple_schemas():
 
     assert result1.data == {"greeting": "Hello A"}
     assert result2.data == {"greeting": "Hello B"}
+
+
+def test_runtime_does_not_use_shape_or_arg_names():
+    original = getattr(CompiledQuery, COMPILED_TYPE_ATTR)
+    resolver_field = original.object_fields[0]
+    assert isinstance(resolver_field, CompiledResolverField)
+
+    mutated_resolver = dataclasses.replace(
+        resolver_field, shape="self_only", arg_names=("totally_wrong",)
+    )
+    mutated_type = dataclasses.replace(original, object_fields=(mutated_resolver,))
+    setattr(CompiledQuery, COMPILED_TYPE_ATTR, mutated_type)
+    try:
+        schema = grommet.Schema(query=CompiledQuery)
+        result = asyncio.run(schema.execute('{ greeting(name: "Gromit") }'))
+        assert result.data == {"greeting": "Hello Gromit"}
+    finally:
+        setattr(CompiledQuery, COMPILED_TYPE_ATTR, original)
+
+
+def test_core_schema_rejects_unknown_registration_type():
+    @dataclass
+    class BadBundle:
+        query: str = "Query"
+        mutation: str | None = None
+        subscription: str | None = None
+        types: list[object] = dataclasses.field(default_factory=lambda: [object()])
+
+    with pytest.raises(TypeError, match="unsupported type registration object"):
+        _core.Schema(BadBundle())
+
+
+def test_core_wrapper_double_consume_fails_fast():
+    field = _core.Field(
+        "name",
+        TypeSpec(kind="named", name="String"),
+        lambda parent, context, kwargs: "ok",
+        False,
+        False,
+    )
+    _core.Object("First", fields=[field])
+    with pytest.raises(TypeError, match="already been consumed"):
+        _core.Object("Second", fields=[field])
+
+
+@grommet.type
+@dataclass
+class ListArgQuery:
+    @grommet.field
+    async def total(self, values: list[int]) -> int:
+        return sum(values)
+
+
+def test_tuple_variable_for_list_is_rejected():
+    schema = grommet.Schema(query=ListArgQuery)
+    query = "query ($values: [Int!]!) { total(values: $values) }"
+    with pytest.raises(TypeError, match="Unsupported value type"):
+        asyncio.run(schema.execute(query, variables={"values": (1, 2)}))
 
 
 @grommet.type

@@ -12,8 +12,8 @@ use pyo3::types::{PyAnyMethods, PyCFunction, PyDict, PyTupleMethods};
 
 use crate::errors::{py_err_to_error, subscription_requires_async_iterator};
 use crate::lookahead::extract_graph;
-use crate::types::{FieldContext, PyObj, ResolverEntry, ResolverShape, StateValue};
-use crate::values::{py_to_field_value_for_type, value_to_py};
+use crate::types::{FieldContext, PyObj, ResolverEntry, StateValue};
+use crate::values::{py_to_field_value_for_type, value_to_py_bound};
 
 type BoxFut = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
 
@@ -236,11 +236,7 @@ async fn resolve_with_resolver(
     entry: &ResolverEntry,
 ) -> Result<Py<PyAny>, Error> {
     // Lazy state extraction: only look up state when the resolver needs context
-    let needs_state = matches!(
-        entry.shape,
-        ResolverShape::SelfAndContext | ResolverShape::SelfContextAndArgs
-    );
-    let state = if needs_state {
+    let state = if entry.needs_context {
         ctx.data::<StateValue>().ok().map(|s| s.0.clone())
     } else {
         None
@@ -273,40 +269,13 @@ fn call_resolver_sync(
     field_ctx: &FieldContext,
     entry: &ResolverEntry,
 ) -> PyResult<Py<PyAny>> {
-    let parent = ctx
-        .parent_value
-        .try_downcast_ref::<PyObj>()
-        .ok()
-        .map(|p| p.clone_ref(py))
-        .unwrap_or_else(|| py.None());
-    let func = entry.func.bind(py);
-    let needs_state = matches!(
-        entry.shape,
-        ResolverShape::SelfAndContext | ResolverShape::SelfContextAndArgs
-    );
-    let state = if needs_state {
+    let parent = ctx.parent_value.try_downcast_ref::<PyObj>().ok().cloned();
+    let state = if entry.needs_context {
         ctx.data::<StateValue>().ok().map(|s| s.0.clone())
     } else {
         None
     };
-    match entry.shape {
-        ResolverShape::SelfOnly => Ok(func.call1((parent,))?.unbind()),
-        ResolverShape::SelfAndContext => {
-            let cls = field_ctx.context_cls.as_ref().expect("context_cls missing");
-            let ctx_obj = build_context_obj(py, ctx, state.as_ref(), cls)?;
-            Ok(func.call1((parent, ctx_obj))?.unbind())
-        }
-        ResolverShape::SelfAndArgs => {
-            let kwargs = build_kwargs(py, ctx, &entry.arg_names)?;
-            Ok(func.call((parent,), Some(&kwargs))?.unbind())
-        }
-        ResolverShape::SelfContextAndArgs => {
-            let cls = field_ctx.context_cls.as_ref().expect("context_cls missing");
-            let ctx_obj = build_context_obj(py, ctx, state.as_ref(), cls)?;
-            let kwargs = build_kwargs(py, ctx, &entry.arg_names)?;
-            Ok(func.call((parent, ctx_obj), Some(&kwargs))?.unbind())
-        }
-    }
+    call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())
 }
 
 fn build_context_obj(
@@ -328,18 +297,11 @@ fn build_context_obj(
     Ok(context_obj.unbind())
 }
 
-fn build_kwargs<'py>(
-    py: Python<'py>,
-    ctx: &ResolverContext<'_>,
-    arg_names: &[String],
-) -> PyResult<Bound<'py, PyDict>> {
+fn build_kwargs<'py>(py: Python<'py>, ctx: &ResolverContext<'_>) -> PyResult<Bound<'py, PyDict>> {
     let kwargs = PyDict::new(py);
-    for name in arg_names {
-        let value = ctx.args.try_get(name.as_str());
-        if let Ok(value) = value {
-            let py_value = value_to_py(py, value.as_value())?;
-            kwargs.set_item(name, py_value)?;
-        }
+    for (name, value) in ctx.args.iter() {
+        let py_value = value_to_py_bound(py, value.as_value())?;
+        kwargs.set_item(name.as_str(), py_value)?;
     }
     Ok(kwargs)
 }
@@ -352,27 +314,17 @@ fn call_resolver(
     parent: Option<&PyObj>,
     state: Option<&PyObj>,
 ) -> PyResult<Py<PyAny>> {
-    let parent_obj = match parent {
+    let parent_obj: Py<PyAny> = match parent {
         Some(p) => p.clone_ref(py),
         None => py.None(),
     };
+    let context_obj: Py<PyAny> = if entry.needs_context {
+        let cls = field_ctx.context_cls.as_ref().expect("context_cls missing");
+        build_context_obj(py, ctx, state, cls)?
+    } else {
+        py.None()
+    };
+    let kwargs = build_kwargs(py, ctx)?;
     let func = entry.func.bind(py);
-    match entry.shape {
-        ResolverShape::SelfOnly => Ok(func.call1((parent_obj,))?.unbind()),
-        ResolverShape::SelfAndContext => {
-            let cls = field_ctx.context_cls.as_ref().expect("context_cls missing");
-            let ctx_obj = build_context_obj(py, ctx, state, cls)?;
-            Ok(func.call1((parent_obj, ctx_obj))?.unbind())
-        }
-        ResolverShape::SelfAndArgs => {
-            let kwargs = build_kwargs(py, ctx, &entry.arg_names)?;
-            Ok(func.call((parent_obj,), Some(&kwargs))?.unbind())
-        }
-        ResolverShape::SelfContextAndArgs => {
-            let cls = field_ctx.context_cls.as_ref().expect("context_cls missing");
-            let ctx_obj = build_context_obj(py, ctx, state, cls)?;
-            let kwargs = build_kwargs(py, ctx, &entry.arg_names)?;
-            Ok(func.call((parent_obj, ctx_obj), Some(&kwargs))?.unbind())
-        }
-    }
+    Ok(func.call1((parent_obj, context_obj, kwargs))?.unbind())
 }

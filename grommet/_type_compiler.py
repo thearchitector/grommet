@@ -37,12 +37,14 @@ def _get_annotated_field_meta(annotation: "Any") -> Field | None:
     return None
 
 
-def _data_field_resolver(field_name: str, default: object) -> "Callable[[Any], Any]":
+def _data_field_resolver(
+    field_name: str, default: object
+) -> "Callable[[Any, Any, dict[str, Any]], Any]":
     getter = attrgetter(field_name)
     if default is MISSING:
-        return getter
+        return lambda self, _context, _kwargs: getter(self)
 
-    def _resolver(self: object) -> object:
+    def _resolver(self: object, _context: object, _kwargs: dict[str, object]) -> object:
         if self is None:
             return default
         return getter(self)

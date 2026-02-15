@@ -1,20 +1,18 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_graphql::dynamic::{
     Field, FieldFuture, FieldValue, InputObject, InputValue, Object, Schema, SchemaBuilder,
     Subscription, SubscriptionField, SubscriptionFieldFuture, TypeRef,
 };
-use async_graphql::futures_util::stream;
 use pyo3::prelude::*;
 
-use crate::errors::py_value_error;
+use crate::errors::{py_type_error, py_value_error};
 use crate::resolver::{resolve_field, resolve_field_sync_fast, resolve_subscription_stream};
-use crate::types::{FieldContext, PyObj, ResolverEntry, ResolverShape};
+use crate::types::{FieldContext, PyObj, ResolverEntry};
 use crate::values::pyobj_to_value;
 
-// ---------------------------------------------------------------------------
-// TypeRef construction from Python TypeSpec dataclass
-// ---------------------------------------------------------------------------
+type FieldArgSpec<'py> = (String, Bound<'py, PyAny>, Option<Bound<'py, PyAny>>);
+type FieldArgSpecs<'py> = Option<Vec<FieldArgSpec<'py>>>;
 
 pub(crate) fn type_spec_to_type_ref(spec: &Bound<'_, PyAny>) -> PyResult<TypeRef> {
     let kind: String = spec.getattr("kind")?.extract()?;
@@ -33,20 +31,16 @@ pub(crate) fn type_spec_to_type_ref(spec: &Bound<'_, PyAny>) -> PyResult<TypeRef
     })
 }
 
-// ---------------------------------------------------------------------------
-// Lazy context class resolution (cached per-process via OnceLock)
-// ---------------------------------------------------------------------------
+fn resolve_context_cls(py: Python<'_>) -> PyResult<PyObj> {
+    static CONTEXT_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
+    if let Some(cls) = CONTEXT_CLS.get() {
+        return Ok(PyObj::new(cls.clone_ref(py)));
+    }
 
-fn resolve_context_cls() -> PyResult<PyObj> {
-    Python::attach(|py| {
-        let cls = py.import("grommet.context")?.getattr("Context")?;
-        Ok(PyObj::new(cls.unbind()))
-    })
+    let cls = py.import("grommet.context")?.getattr("Context")?.unbind();
+    let _ = CONTEXT_CLS.set(cls.clone_ref(py));
+    Ok(PyObj::new(cls))
 }
-
-// ---------------------------------------------------------------------------
-// InputValue construction helper (shared by Field and SubscriptionField args)
-// ---------------------------------------------------------------------------
 
 fn build_input_value(
     name: String,
@@ -62,53 +56,60 @@ fn build_input_value(
     Ok(iv)
 }
 
-// ---------------------------------------------------------------------------
-// PyField — wraps async_graphql::dynamic::Field
-// ---------------------------------------------------------------------------
+fn build_field_context(
+    py: Python<'_>,
+    func: Py<PyAny>,
+    needs_context: bool,
+    is_async_gen: bool,
+    output_type: &TypeRef,
+) -> PyResult<Arc<FieldContext>> {
+    let context_cls = if needs_context {
+        Some(resolve_context_cls(py)?)
+    } else {
+        None
+    };
+
+    Ok(Arc::new(FieldContext {
+        resolver: Some(ResolverEntry {
+            func: PyObj::new(func),
+            needs_context,
+            is_async_gen,
+        }),
+        output_type: output_type.clone(),
+        context_cls,
+    }))
+}
+
+fn take_inner<T>(slot: &mut Option<T>, type_name: &str) -> PyResult<T> {
+    slot.take().ok_or_else(|| {
+        py_type_error(format!(
+            "{type_name} has already been consumed and cannot be reused"
+        ))
+    })
+}
 
 #[pyclass(module = "grommet._core", name = "Field")]
 pub(crate) struct PyField {
-    inner: Field,
+    inner: Option<Field>,
 }
 
 #[pymethods]
 impl PyField {
     #[new]
-    #[pyo3(signature = (name, type_spec, func, shape, arg_names, is_async, description=None, args=None))]
+    #[pyo3(signature = (name, type_spec, func, needs_context, is_async, description=None, args=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
+        py: Python<'_>,
         name: String,
         type_spec: &Bound<'_, PyAny>,
         func: Py<PyAny>,
-        shape: &str,
-        arg_names: Vec<String>,
+        needs_context: bool,
         is_async: bool,
         description: Option<String>,
-        args: Option<Vec<(String, Bound<'_, PyAny>, Option<Bound<'_, PyAny>>)>>,
+        args: FieldArgSpecs<'_>,
     ) -> PyResult<Self> {
         let type_ref = type_spec_to_type_ref(type_spec)?;
-        let resolver_shape = ResolverShape::from_str(shape)?;
-
-        let needs_ctx = matches!(
-            resolver_shape,
-            ResolverShape::SelfAndContext | ResolverShape::SelfContextAndArgs
-        );
-        let context_cls = if needs_ctx {
-            Some(resolve_context_cls()?)
-        } else {
-            None
-        };
-
-        let field_ctx = Arc::new(FieldContext {
-            resolver: Some(ResolverEntry {
-                func: PyObj::new(func),
-                shape: resolver_shape,
-                arg_names,
-                is_async_gen: false,
-            }),
-            output_type: type_ref.clone(),
-            context_cls,
-        });
+        let field_ctx = build_field_context(py, func, needs_context, false, &type_ref)?;
 
         let mut field = Field::new(name, type_ref, move |ctx| {
             if is_async {
@@ -134,56 +135,37 @@ impl PyField {
             }
         }
 
-        Ok(PyField { inner: field })
+        Ok(PyField { inner: Some(field) })
     }
 }
 
-// ---------------------------------------------------------------------------
-// PySubscriptionField — wraps async_graphql::dynamic::SubscriptionField
-// ---------------------------------------------------------------------------
+impl PyField {
+    pub(crate) fn consume(&mut self) -> PyResult<Field> {
+        take_inner(&mut self.inner, "Field")
+    }
+}
 
 #[pyclass(module = "grommet._core", name = "SubscriptionField")]
 pub(crate) struct PySubscriptionField {
-    inner: SubscriptionField,
+    inner: Option<SubscriptionField>,
 }
 
 #[pymethods]
 impl PySubscriptionField {
     #[new]
-    #[pyo3(signature = (name, type_spec, func, shape, arg_names, description=None, args=None))]
+    #[pyo3(signature = (name, type_spec, func, needs_context, description=None, args=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
+        py: Python<'_>,
         name: String,
         type_spec: &Bound<'_, PyAny>,
         func: Py<PyAny>,
-        shape: &str,
-        arg_names: Vec<String>,
+        needs_context: bool,
         description: Option<String>,
-        args: Option<Vec<(String, Bound<'_, PyAny>, Option<Bound<'_, PyAny>>)>>,
+        args: FieldArgSpecs<'_>,
     ) -> PyResult<Self> {
         let type_ref = type_spec_to_type_ref(type_spec)?;
-        let resolver_shape = ResolverShape::from_str(shape)?;
-
-        let needs_ctx = matches!(
-            resolver_shape,
-            ResolverShape::SelfAndContext | ResolverShape::SelfContextAndArgs
-        );
-        let context_cls = if needs_ctx {
-            Some(resolve_context_cls()?)
-        } else {
-            None
-        };
-
-        let field_ctx = Arc::new(FieldContext {
-            resolver: Some(ResolverEntry {
-                func: PyObj::new(func),
-                shape: resolver_shape,
-                arg_names,
-                is_async_gen: true,
-            }),
-            output_type: type_ref.clone(),
-            context_cls,
-        });
+        let field_ctx = build_field_context(py, func, needs_context, true, &type_ref)?;
 
         let mut field = SubscriptionField::new(name, type_ref, move |ctx| {
             let field_ctx = field_ctx.clone();
@@ -203,17 +185,19 @@ impl PySubscriptionField {
             }
         }
 
-        Ok(PySubscriptionField { inner: field })
+        Ok(PySubscriptionField { inner: Some(field) })
     }
 }
 
-// ---------------------------------------------------------------------------
-// PyInputValue — wraps async_graphql::dynamic::InputValue
-// ---------------------------------------------------------------------------
+impl PySubscriptionField {
+    pub(crate) fn consume(&mut self) -> PyResult<SubscriptionField> {
+        take_inner(&mut self.inner, "SubscriptionField")
+    }
+}
 
 #[pyclass(module = "grommet._core", name = "InputValue")]
 pub(crate) struct PyInputValue {
-    inner: InputValue,
+    inner: Option<InputValue>,
 }
 
 #[pymethods]
@@ -235,17 +219,19 @@ impl PyInputValue {
         if let Some(desc) = description.as_deref() {
             iv = iv.description(desc);
         }
-        Ok(PyInputValue { inner: iv })
+        Ok(PyInputValue { inner: Some(iv) })
     }
 }
 
-// ---------------------------------------------------------------------------
-// PyObject — wraps async_graphql::dynamic::Object
-// ---------------------------------------------------------------------------
+impl PyInputValue {
+    pub(crate) fn consume(&mut self) -> PyResult<InputValue> {
+        take_inner(&mut self.inner, "InputValue")
+    }
+}
 
 #[pyclass(module = "grommet._core", name = "Object")]
 pub(crate) struct PyObject {
-    inner: Object,
+    inner: Option<Object>,
 }
 
 #[pymethods]
@@ -263,31 +249,23 @@ impl PyObject {
         }
         if let Some(field_list) = fields {
             for f in field_list {
-                let mut f_mut = f.borrow_mut();
-                let field = std::mem::replace(
-                    &mut f_mut.inner,
-                    Field::new("_", TypeRef::named("String"), |_| FieldFuture::Value(None)),
-                );
+                let field = f.borrow_mut().consume()?;
                 obj = obj.field(field);
             }
         }
-        Ok(PyObject { inner: obj })
+        Ok(PyObject { inner: Some(obj) })
     }
 }
 
 impl PyObject {
-    pub(crate) fn consume(&mut self) -> Object {
-        std::mem::replace(&mut self.inner, Object::new("_"))
+    pub(crate) fn consume(&mut self) -> PyResult<Object> {
+        take_inner(&mut self.inner, "Object")
     }
 }
 
-// ---------------------------------------------------------------------------
-// PyInputObject — wraps async_graphql::dynamic::InputObject
-// ---------------------------------------------------------------------------
-
 #[pyclass(module = "grommet._core", name = "InputObject")]
 pub(crate) struct PyInputObject {
-    inner: InputObject,
+    inner: Option<InputObject>,
 }
 
 #[pymethods]
@@ -305,31 +283,23 @@ impl PyInputObject {
         }
         if let Some(field_list) = fields {
             for iv in field_list {
-                let mut iv_mut = iv.borrow_mut();
-                let input_value = std::mem::replace(
-                    &mut iv_mut.inner,
-                    InputValue::new("_", TypeRef::named("String")),
-                );
+                let input_value = iv.borrow_mut().consume()?;
                 obj = obj.field(input_value);
             }
         }
-        Ok(PyInputObject { inner: obj })
+        Ok(PyInputObject { inner: Some(obj) })
     }
 }
 
 impl PyInputObject {
-    pub(crate) fn consume(&mut self) -> InputObject {
-        std::mem::replace(&mut self.inner, InputObject::new("_"))
+    pub(crate) fn consume(&mut self) -> PyResult<InputObject> {
+        take_inner(&mut self.inner, "InputObject")
     }
 }
 
-// ---------------------------------------------------------------------------
-// PySubscription — wraps async_graphql::dynamic::Subscription
-// ---------------------------------------------------------------------------
-
 #[pyclass(module = "grommet._core", name = "Subscription")]
 pub(crate) struct PySubscription {
-    inner: Subscription,
+    inner: Option<Subscription>,
 }
 
 #[pymethods]
@@ -347,31 +317,19 @@ impl PySubscription {
         }
         if let Some(field_list) = fields {
             for sf in field_list {
-                let mut sf_mut = sf.borrow_mut();
-                let sub_field = std::mem::replace(
-                    &mut sf_mut.inner,
-                    SubscriptionField::new("_", TypeRef::named("String"), |_| {
-                        SubscriptionFieldFuture::new(async {
-                            Ok(stream::empty::<Result<FieldValue<'_>, async_graphql::Error>>())
-                        })
-                    }),
-                );
+                let sub_field = sf.borrow_mut().consume()?;
                 obj = obj.field(sub_field);
             }
         }
-        Ok(PySubscription { inner: obj })
+        Ok(PySubscription { inner: Some(obj) })
     }
 }
 
 impl PySubscription {
-    pub(crate) fn consume(&mut self) -> Subscription {
-        std::mem::replace(&mut self.inner, Subscription::new("_"))
+    pub(crate) fn consume(&mut self) -> PyResult<Subscription> {
+        take_inner(&mut self.inner, "Subscription")
     }
 }
-
-// ---------------------------------------------------------------------------
-// Schema registration: accepts pre-built type objects from Python
-// ---------------------------------------------------------------------------
 
 pub(crate) enum RegistrableType {
     Object(Object),
@@ -385,16 +343,14 @@ pub(crate) fn register_schema(
     subscription: Option<&str>,
     types: Vec<RegistrableType>,
 ) -> PyResult<Schema> {
-    let mut builder: SchemaBuilder = Schema::build(query, mutation, subscription);
-
-    for ty in types {
-        let b = std::mem::replace(&mut builder, Schema::build("_", None, None));
-        builder = match ty {
-            RegistrableType::Object(obj) => b.register(obj),
-            RegistrableType::InputObject(inp) => b.register(inp),
-            RegistrableType::Subscription(sub) => b.register(sub),
-        };
-    }
+    let builder: SchemaBuilder = types.into_iter().fold(
+        Schema::build(query, mutation, subscription),
+        |builder, ty| match ty {
+            RegistrableType::Object(obj) => builder.register(obj),
+            RegistrableType::InputObject(inp) => builder.register(inp),
+            RegistrableType::Subscription(sub) => builder.register(sub),
+        },
+    );
 
     builder
         .finish()

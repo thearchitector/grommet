@@ -157,32 +157,6 @@ Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
             });
         }
 
-        /// Verifies Python values convert to field GraphQL values.
-        #[test]
-        fn py_to_field_value_covers_paths() {
-            crate::with_py(|py| {
-                let none_value = py.None();
-                let _ = py_to_field_value(py, &none_value.bind(py)).unwrap();
-
-                let bool_value = PyBool::new(py, true).to_owned().into_any();
-                let _ = py_to_field_value(py, &bool_value).unwrap();
-
-                let float_value = 1.5f64.into_pyobject(py).unwrap().into_any();
-                let _ = py_to_field_value(py, &float_value).unwrap();
-
-                let list = PyList::new(py, [1, 2]).unwrap();
-                let list_any = list.into_any();
-                let _ = py_to_field_value(py, &list_any).unwrap();
-
-                let tuple_any = ("a", "b").into_pyobject(py).unwrap().into_any();
-                let _ = py_to_field_value(py, &tuple_any).unwrap();
-
-                let locals = make_meta_objects(py);
-                let custom = locals.get_item("Obj").unwrap().unwrap().call0().unwrap();
-                let _ = py_to_field_value(py, &custom).unwrap();
-            });
-        }
-
         /// Verifies Python values convert to GraphQL values across variants.
         #[test]
         fn py_to_value_covers_primitives_and_collections() {
@@ -230,14 +204,9 @@ Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
                 assert_eq!(value, Value::List(vec![Value::from(1), Value::from(2)]));
 
                 let tuple = ("a", "b").into_pyobject(py).unwrap().into_any();
-                let value = py_to_value(py, &tuple).unwrap();
-                assert_eq!(
-                    value,
-                    Value::List(vec![
-                        Value::String("a".to_string()),
-                        Value::String("b".to_string())
-                    ])
-                );
+                let err = py_to_value(py, &tuple).expect_err("tuple should be unsupported");
+                let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
+                assert_eq!(msg, "Unsupported value type");
 
                 let dict = PyDict::new(py);
                 dict.set_item("x", 1).unwrap();
@@ -264,7 +233,10 @@ Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
                 let list_any = list.into_any();
                 let _ = py_to_field_value_for_type(py, &list_any, &list_ref).unwrap();
                 let tuple_any = ("a", "b").into_pyobject(py).unwrap().into_any();
-                let _ = py_to_field_value_for_type(py, &tuple_any, &list_ref).unwrap();
+                let err = py_to_field_value_for_type(py, &tuple_any, &list_ref)
+                    .expect_err("tuple should be rejected for list types");
+                let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
+                assert_eq!(msg, "Expected list for GraphQL list type");
 
                 let int_any = PyInt::new(py, 42).into_any();
                 let err = py_to_field_value_for_type(py, &int_any, &list_ref)
@@ -355,7 +327,7 @@ Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
             });
         }
 
-        /// Verifies sequence conversion helpers handle lists and tuples correctly.
+        /// Verifies sequence conversion helper enforces list-only semantics.
         #[test]
         fn convert_sequence_helpers_cover_paths() {
             crate::with_py(|py| {
@@ -367,31 +339,16 @@ Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
                     convert_sequence_to_field_values(py, &list.into_any(), &inner_type).unwrap();
                 let _ = result;
 
-                // Test tuple conversion with type
+                // Test tuple conversion with type should fail
                 let tuple = ("x", "y").into_pyobject(py).unwrap().into_any();
-                let result = convert_sequence_to_field_values(py, &tuple, &inner_type).unwrap();
-                let _ = result;
-
-                // Test untyped list conversion
-                let list = PyList::new(py, [1, 2, 3]).unwrap();
-                let result =
-                    convert_sequence_to_field_values_untyped(py, &list.into_any()).unwrap();
-                let _ = result;
-
-                // Test untyped tuple conversion
-                let tuple = (4, 5, 6).into_pyobject(py).unwrap().into_any();
-                let result = convert_sequence_to_field_values_untyped(py, &tuple).unwrap();
-                let _ = result;
+                let err = convert_sequence_to_field_values(py, &tuple, &inner_type)
+                    .expect_err("tuple should be rejected");
+                let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
+                assert_eq!(msg, "Expected list for GraphQL list type");
 
                 // Test error case: non-sequence passed to typed converter
                 let int_obj = PyInt::new(py, 42).into_any();
                 let err = convert_sequence_to_field_values(py, &int_obj, &inner_type)
-                    .expect_err("should error for non-list");
-                let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
-                assert_eq!(msg, "Expected list for GraphQL list type");
-
-                // Test error case: non-sequence passed to untyped converter
-                let err = convert_sequence_to_field_values_untyped(py, &int_obj)
                     .expect_err("should error for non-list");
                 let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
                 assert_eq!(msg, "Expected list for GraphQL list type");

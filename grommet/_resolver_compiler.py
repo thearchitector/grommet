@@ -47,20 +47,33 @@ def _resolver_name(resolver: "Callable[..., Any]") -> str:
     return getattr(resolver, "__name__", resolver.__class__.__name__)
 
 
-def _wrap_with_coercion(
-    func: "Callable[..., Any]", coercers: list[tuple[str, "Callable[[Any], Any]"]]
+def _resolver_adapter(
+    func: "Callable[..., Any]",
+    *,
+    has_context: bool,
+    arg_names: tuple[str, ...],
+    coercers: list[tuple[str, "Callable[[Any], Any]"]],
 ) -> "Callable[..., Any]":
-    """Wrap a resolver so that input-type args are coerced before dispatch."""
+    """Adapt a resolver to a stable runtime call shape used by Rust."""
+    coercer_map = dict(coercers)
 
-    def _wrapper(*args: "Any", **kwargs: "Any") -> "Any":
-        for name, coercer in coercers:
-            if name in kwargs:
-                kwargs[name] = coercer(kwargs[name])
-        return func(*args, **kwargs)
+    def _adapter(parent: "Any", context: "Any", kwargs: dict[str, "Any"]) -> "Any":
+        call_kwargs: dict[str, "Any"] = {}
+        for name in arg_names:
+            if name not in kwargs:
+                continue
+            value = kwargs[name]
+            coercer = coercer_map.get(name)
+            if coercer is not None:
+                value = coercer(value)
+            call_kwargs[name] = value
+        if has_context:
+            return func(parent, context, **call_kwargs)
+        return func(parent, **call_kwargs)
 
-    _wrapper.__name__ = getattr(func, "__name__", "wrapped")
-    _wrapper.__qualname__ = getattr(func, "__qualname__", "wrapped")
-    return _wrapper
+    _adapter.__name__ = getattr(func, "__name__", "wrapped")
+    _adapter.__qualname__ = getattr(func, "__qualname__", "wrapped")
+    return _adapter
 
 
 def _build_arg_info(
@@ -149,8 +162,10 @@ def compile_resolver_field(
         func = syncify(resolver)
         is_async = False
 
-    if coercers:
-        func = _wrap_with_coercion(func, coercers)
+    arg_names_tuple = tuple(arg_names)
+    func = _resolver_adapter(
+        func, has_context=has_context, arg_names=arg_names_tuple, coercers=coercers
+    )
 
     return_ann = hints.get("return", inspect._empty)
     if return_ann is inspect._empty:
@@ -167,8 +182,9 @@ def compile_resolver_field(
         kind=kind,
         name=field_name,
         func=func,
+        needs_context=has_context,
         shape=shape,
-        arg_names=tuple(arg_names),
+        arg_names=arg_names_tuple,
         is_async=is_async,
         type_spec=type_spec,
         description=description,

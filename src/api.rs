@@ -9,6 +9,7 @@ use async_graphql::{Request, Variables};
 use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
 
+use crate::errors::py_type_error;
 use crate::schema_types::{
     PyInputObject, PyObject, PySubscription, RegistrableType, register_schema,
 };
@@ -74,11 +75,15 @@ impl SchemaWrapper {
         for item in &types_list {
             let bound = item.bind(py);
             if let Ok(cell) = bound.cast::<PyObject>() {
-                types.push(RegistrableType::Object(cell.borrow_mut().consume()));
+                types.push(RegistrableType::Object(cell.borrow_mut().consume()?));
             } else if let Ok(cell) = bound.cast::<PyInputObject>() {
-                types.push(RegistrableType::InputObject(cell.borrow_mut().consume()));
+                types.push(RegistrableType::InputObject(cell.borrow_mut().consume()?));
             } else if let Ok(cell) = bound.cast::<PySubscription>() {
-                types.push(RegistrableType::Subscription(cell.borrow_mut().consume()));
+                types.push(RegistrableType::Subscription(cell.borrow_mut().consume()?));
+            } else {
+                return Err(py_type_error(
+                    "Schema bundle contains an unsupported type registration object",
+                ));
             }
         }
 
