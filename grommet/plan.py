@@ -1,14 +1,16 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .annotations import _get_type_meta, _is_grommet_type
-from .decorators import (
-    _REFS_ATTR,
-    _build_input_type,
-    _build_object_type,
-    _build_subscription_type,
+from ._compiled import (
+    COMPILED_TYPE_ATTR,
+    REFS_ATTR,
+    CompiledDataField,
+    CompiledType,
+    instantiate_core_type,
 )
-from .metadata import TypeKind
+from .annotations import _get_type_meta, _is_grommet_type
+from .errors import GrommetTypeError
+from .metadata import MISSING
 
 if TYPE_CHECKING:
     from builtins import type as pytype
@@ -31,54 +33,65 @@ def build_schema_graph(
     mutation: "pytype | None" = None,
     subscription: "pytype | None" = None,
 ) -> SchemaBundle:
-    """Build schema graph by walking decorated types and constructing Rust objects."""
-    collected = _walk_and_collect(query, mutation, subscription)
+    """Build schema graph using precompiled class metadata only."""
+    for root in (query, mutation, subscription):
+        if root is None:
+            continue
+        _validate_root_defaults(root)
+
+    collected_classes = _walk_and_collect(query, mutation, subscription)
+    types = [
+        instantiate_core_type(_get_compiled_type(cls)) for cls in collected_classes
+    ]
 
     return SchemaBundle(
         query=_get_type_meta(query).name,
         mutation=_get_type_meta(mutation).name if mutation else None,
         subscription=_get_type_meta(subscription).name if subscription else None,
-        types=collected,
+        types=types,
     )
 
 
-def _build_rust_type(cls: "pytype") -> "Any":
-    """Build a fresh Rust type object from the metadata stored by the decorator."""
-    meta = _get_type_meta(cls)
-    if meta.kind is TypeKind.INPUT:
-        return _build_input_type(
-            cls, type_name=meta.name, description=meta.description
-        )[0]
-    if meta.kind is TypeKind.SUBSCRIPTION:
-        return _build_subscription_type(
-            cls, type_name=meta.name, description=meta.description
-        )[0]
-    return _build_object_type(cls, type_name=meta.name, description=meta.description)[0]
+def _get_compiled_type(cls: "pytype") -> CompiledType:
+    compiled = getattr(cls, COMPILED_TYPE_ATTR, None)
+    if isinstance(compiled, CompiledType):
+        return compiled
+    raise GrommetTypeError(f"{cls.__name__} is missing compiled grommet type metadata.")
 
 
 def _walk_and_collect(
     query: "pytype", mutation: "pytype | None", subscription: "pytype | None"
-) -> "list[Any]":
-    """Recursively walk type refs and build fresh Rust objects."""
+) -> list["pytype"]:
     pending: list[pytype] = [
         tp for tp in (query, mutation, subscription) if tp is not None
     ]
     visited: set[pytype] = set()
-    rust_types: list[Any] = []
+    collected: list[pytype] = []
 
     while pending:
         cls = pending.pop()
         if cls in visited:
             continue
+
         visited.add(cls)
         if not _is_grommet_type(cls):
             continue
 
-        rust_types.append(_build_rust_type(cls))
+        collected.append(cls)
 
-        refs: frozenset[pytype] = getattr(cls, _REFS_ATTR, frozenset())
+        refs: frozenset[pytype] = getattr(cls, REFS_ATTR, frozenset())
         for ref_cls in refs:
             if ref_cls not in visited:
                 pending.append(ref_cls)
 
-    return rust_types
+    return collected
+
+
+def _validate_root_defaults(root: "pytype") -> None:
+    compiled = _get_compiled_type(root)
+    for field in compiled.object_fields:
+        if isinstance(field, CompiledDataField) and field.default is MISSING:
+            raise GrommetTypeError(
+                f"Root type '{compiled.meta.name}' field '{field.name}' must declare "
+                "a default value or use @grommet.field."
+            )

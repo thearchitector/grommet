@@ -1,6 +1,7 @@
-"""Tests for resolver analysis: can_syncify/syncify, decorator-time analysis, and attrgetter data fields."""
+"""Tests for resolver compilation and decorator-time schema metadata."""
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
@@ -8,21 +9,13 @@ import pytest
 from noaio import can_syncify, syncify
 
 import grommet
-from grommet.decorators import (
-    _analyze_and_build_field,
-    _analyze_and_build_subscription_field,
+import grommet.annotations as annotations_module
+from grommet._compiled import (
+    COMPILED_RESOLVER_ATTR,
+    COMPILED_TYPE_ATTR,
+    CompiledResolverField,
+    CompiledType,
 )
-
-# __grommet_field_data__ tuple indices:
-# (field_name, func, shape, arg_names, is_async, return_spec, description, arg_plans)
-_FD_NAME = 0
-_FD_FUNC = 1
-_FD_SHAPE = 2
-_FD_IS_ASYNC = 4
-
-# ---------------------------------------------------------------------------
-# can_syncify tests (replaces _has_await tests with noaio equivalents)
-# ---------------------------------------------------------------------------
 
 
 async def _await_free(self):
@@ -81,11 +74,6 @@ def test_can_syncify_false_for_async_with():
     assert can_syncify(_with_async_with) is False
 
 
-# ---------------------------------------------------------------------------
-# syncify tests
-# ---------------------------------------------------------------------------
-
-
 def test_syncify_returns_value():
     async def coro(x):
         return x * 2
@@ -112,69 +100,67 @@ def test_syncify_propagates_exception():
         sync(None)
 
 
-# ---------------------------------------------------------------------------
-# _analyze_and_build_field: sync demotion and sync acceptance
-# ---------------------------------------------------------------------------
-
-
-def test_analyze_demotes_await_free_async():
+def test_field_decorator_compiles_resolver_metadata():
     async def resolver(self) -> int:
         return 1
 
-    result = _analyze_and_build_field(resolver, field_name="x", description=None)
-    data = result.__grommet_field_data__
-    assert data[_FD_IS_ASYNC] is False
-    assert data[_FD_SHAPE] == "self_only"
-    # func should be the syncified wrapper, not the original
-    assert data[_FD_FUNC] is not resolver
-    assert data[_FD_FUNC](None) == 1
+    result = grommet.field(resolver)
+    compiled = getattr(result, COMPILED_RESOLVER_ATTR)
+
+    assert isinstance(compiled, CompiledResolverField)
+    assert compiled.kind == "field"
+    assert compiled.shape == "self_only"
+    assert compiled.is_async is False
+    assert compiled.func is not resolver
+    assert compiled.func(None) == 1
 
 
-def test_analyze_keeps_async_with_await():
+def test_field_decorator_keeps_async_with_await():
     async def resolver(self) -> int:
         await asyncio.sleep(0)
         return 1
 
-    result = _analyze_and_build_field(resolver, field_name="x", description=None)
-    assert result.__grommet_field_data__[_FD_IS_ASYNC] is True
+    result = grommet.field(resolver)
+    compiled = getattr(result, COMPILED_RESOLVER_ATTR)
+
+    assert isinstance(compiled, CompiledResolverField)
+    assert compiled.kind == "field"
+    assert compiled.is_async is True
 
 
-def test_analyze_accepts_sync_resolver():
+def test_field_decorator_accepts_sync_resolver():
     def resolver(self) -> int:
         return 42
 
-    result = _analyze_and_build_field(resolver, field_name="x", description=None)
-    data = result.__grommet_field_data__
-    assert data[_FD_IS_ASYNC] is False
-    assert data[_FD_FUNC] is resolver
-    assert data[_FD_SHAPE] == "self_only"
+    result = grommet.field(resolver)
+    compiled = getattr(result, COMPILED_RESOLVER_ATTR)
+
+    assert isinstance(compiled, CompiledResolverField)
+    assert compiled.kind == "field"
+    assert compiled.is_async is False
+    assert compiled.func is resolver
 
 
-def test_analyze_subscription_requires_async():
+def test_subscription_decorator_requires_async_generator():
     def resolver(self) -> int:
         return 1
 
     with pytest.raises(TypeError):
-        _analyze_and_build_subscription_field(
-            resolver, field_name="x", description=None
-        )
+        grommet.subscription(resolver)
 
 
-def test_analyze_subscription_keeps_async_gen():
+def test_subscription_decorator_compiles_resolver_metadata():
     async def resolver(self, limit: int) -> AsyncIterator[int]:
         for i in range(limit):
             yield i
 
-    result = _analyze_and_build_subscription_field(
-        resolver, field_name="x", description=None
-    )
-    # __grommet_sub_field_data__ tuple: (name, func, shape, arg_names, type_spec, desc, arg_plans)
-    assert result.__grommet_sub_field_data__[2] == "self_and_args"
+    result = grommet.subscription(resolver)
+    compiled = getattr(result, COMPILED_RESOLVER_ATTR)
 
-
-# ---------------------------------------------------------------------------
-# attrgetter integration via end-to-end schema execution
-# ---------------------------------------------------------------------------
+    assert isinstance(compiled, CompiledResolverField)
+    assert compiled.kind == "subscription"
+    assert compiled.shape == "self_and_args"
+    assert compiled.is_async is True
 
 
 @grommet.type
@@ -188,11 +174,6 @@ def test_attrgetter_data_field_resolves():
     schema = grommet.Schema(query=AttrgQuery)
     result = asyncio.run(schema.execute("{ name age }"))
     assert result.data == {"name": "Gromit", "age": 5}
-
-
-# ---------------------------------------------------------------------------
-# Sync resolver end-to-end
-# ---------------------------------------------------------------------------
 
 
 @grommet.type
@@ -221,3 +202,108 @@ def test_demoted_async_resolver_end_to_end():
     schema = grommet.Schema(query=DemotedQuery)
     result = asyncio.run(schema.execute("{ computed }"))
     assert result.data == {"computed": "demoted-value"}
+
+
+@grommet.type
+@dataclass
+class CompiledQuery:
+    @grommet.field
+    async def greeting(self, name: str) -> str:
+        return f"Hello {name}"
+
+
+def test_type_decorator_compiles_type_metadata():
+    compiled = getattr(CompiledQuery, COMPILED_TYPE_ATTR)
+
+    assert isinstance(compiled, CompiledType)
+    assert compiled.meta.name == "CompiledQuery"
+    assert len(compiled.object_fields) == 1
+
+
+def test_schema_build_does_not_reinspect_resolvers(monkeypatch: pytest.MonkeyPatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("inspect.signature should not run during schema build")
+
+    monkeypatch.setattr(inspect, "signature", boom)
+
+    schema = grommet.Schema(query=CompiledQuery)
+    result = asyncio.run(schema.execute('{ greeting(name: "Gromit") }'))
+    assert result.data == {"greeting": "Hello Gromit"}
+
+
+def test_schema_build_does_not_recompile_annotations(monkeypatch: pytest.MonkeyPatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError(
+            "_type_spec_from_annotation should not run during schema build"
+        )
+
+    monkeypatch.setattr(annotations_module, "_type_spec_from_annotation", boom)
+
+    schema = grommet.Schema(query=CompiledQuery)
+    result = asyncio.run(schema.execute('{ greeting(name: "Gromit") }'))
+    assert result.data == {"greeting": "Hello Gromit"}
+
+
+def test_same_compiled_type_supports_multiple_schemas():
+    schema1 = grommet.Schema(query=CompiledQuery)
+    schema2 = grommet.Schema(query=CompiledQuery)
+
+    result1 = asyncio.run(schema1.execute('{ greeting(name: "A") }'))
+    result2 = asyncio.run(schema2.execute('{ greeting(name: "B") }'))
+
+    assert result1.data == {"greeting": "Hello A"}
+    assert result2.data == {"greeting": "Hello B"}
+
+
+@grommet.type
+@dataclass
+class RootWithoutDefault:
+    greeting: str
+
+
+def test_root_data_field_without_default_fails_fast():
+    with pytest.raises(TypeError, match="must declare a default value"):
+        grommet.Schema(query=RootWithoutDefault)
+
+
+def test_input_type_with_resolver_is_rejected():
+    with pytest.raises(TypeError, match="Input types cannot declare field resolvers"):
+
+        @grommet.input
+        @dataclass
+        class InputWithResolver:
+            @grommet.field
+            async def value(self) -> str:
+                return "nope"
+
+
+def test_type_cannot_mix_field_and_subscription_decorators():
+    with pytest.raises(
+        TypeError, match="A type cannot mix @field and @subscription decorators"
+    ):
+
+        @grommet.type
+        @dataclass
+        class InvalidMixedType:
+            @grommet.field
+            async def greeting(self) -> str:
+                return "hello"
+
+            @grommet.subscription
+            async def ticks(self) -> AsyncIterator[int]:
+                yield 1
+
+
+def test_subscription_type_cannot_declare_data_fields():
+    with pytest.raises(
+        TypeError, match="Subscription types cannot declare data fields"
+    ):
+
+        @grommet.type
+        @dataclass
+        class InvalidSubscriptionType:
+            count: int = 1
+
+            @grommet.subscription
+            async def ticks(self) -> AsyncIterator[int]:
+                yield self.count
