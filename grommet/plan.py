@@ -1,30 +1,22 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ._compiled import (
-    COMPILED_TYPE_ATTR,
-    REFS_ATTR,
-    CompiledDataField,
-    CompiledType,
-    instantiate_core_type,
-)
+from ._compiled import COMPILED_TYPE_ATTR, REFS_ATTR, CompiledDataField, CompiledType
 from .annotations import _get_type_meta, _is_grommet_type
 from .errors import GrommetTypeError
-from .metadata import MISSING
 
 if TYPE_CHECKING:
     from builtins import type as pytype
-    from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
 class SchemaBundle:
-    """Bundle of Rust type objects ready for registration."""
+    """Bundle of compiled schema metadata ready for Rust registration."""
 
     query: str
     mutation: str | None
     subscription: str | None
-    types: list["Any"]
+    types: list[CompiledType]
 
 
 def build_schema_graph(
@@ -40,9 +32,7 @@ def build_schema_graph(
         _validate_root_defaults(root)
 
     collected_classes = _walk_and_collect(query, mutation, subscription)
-    types = [
-        instantiate_core_type(_get_compiled_type(cls)) for cls in collected_classes
-    ]
+    types = [_get_compiled_type(cls) for cls in collected_classes]
 
     return SchemaBundle(
         query=_get_type_meta(query).name,
@@ -90,7 +80,7 @@ def _walk_and_collect(
 def _validate_root_defaults(root: "pytype") -> None:
     compiled = _get_compiled_type(root)
     for field in compiled.object_fields:
-        if isinstance(field, CompiledDataField) and field.default is MISSING:
+        if isinstance(field, CompiledDataField) and not field.has_default:
             raise GrommetTypeError(
                 f"Root type '{compiled.meta.name}' field '{field.name}' must declare "
                 "a default value or use @grommet.field."

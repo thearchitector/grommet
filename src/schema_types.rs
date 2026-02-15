@@ -5,14 +5,15 @@ use async_graphql::dynamic::{
     Subscription, SubscriptionField, SubscriptionFieldFuture, TypeRef,
 };
 use pyo3::prelude::*;
+use pyo3::types::PyAnyMethods;
 
 use crate::errors::{py_type_error, py_value_error};
 use crate::resolver::{resolve_field, resolve_field_sync_fast, resolve_subscription_stream};
 use crate::types::{FieldContext, PyObj, ResolverEntry};
 use crate::values::pyobj_to_value;
 
-type FieldArgSpec<'py> = (String, Bound<'py, PyAny>, Option<Bound<'py, PyAny>>);
-type FieldArgSpecs<'py> = Option<Vec<FieldArgSpec<'py>>>;
+const UNSUPPORTED_REGISTRATION_TYPE: &str =
+    "Schema bundle contains an unsupported type registration object";
 
 pub(crate) fn type_spec_to_type_ref(spec: &Bound<'_, PyAny>) -> PyResult<TypeRef> {
     let kind: String = spec.getattr("kind")?.extract()?;
@@ -24,11 +25,16 @@ pub(crate) fn type_spec_to_type_ref(spec: &Bound<'_, PyAny>) -> PyResult<TypeRef
         let name: String = spec.getattr("name")?.extract()?;
         TypeRef::named(name)
     };
+
     Ok(if nullable {
         ty
     } else {
         TypeRef::NonNull(Box::new(ty))
     })
+}
+
+fn unsupported_registration_type() -> PyErr {
+    py_type_error(UNSUPPORTED_REGISTRATION_TYPE)
 }
 
 fn resolve_context_cls(py: Python<'_>) -> PyResult<PyObj> {
@@ -40,20 +46,6 @@ fn resolve_context_cls(py: Python<'_>) -> PyResult<PyObj> {
     let cls = py.import("grommet.context")?.getattr("Context")?.unbind();
     let _ = CONTEXT_CLS.set(cls.clone_ref(py));
     Ok(PyObj::new(cls))
-}
-
-fn build_input_value(
-    name: String,
-    type_spec: &Bound<'_, PyAny>,
-    default_value: Option<&Bound<'_, PyAny>>,
-) -> PyResult<InputValue> {
-    let type_ref = type_spec_to_type_ref(type_spec)?;
-    let mut iv = InputValue::new(name, type_ref);
-    if let Some(dv) = default_value {
-        let py_obj = PyObj::new(dv.clone().unbind());
-        iv = iv.default_value(pyobj_to_value(&py_obj)?);
-    }
-    Ok(iv)
 }
 
 fn build_field_context(
@@ -80,255 +72,196 @@ fn build_field_context(
     }))
 }
 
-fn take_inner<T>(slot: &mut Option<T>, type_name: &str) -> PyResult<T> {
-    slot.take().ok_or_else(|| {
-        py_type_error(format!(
-            "{type_name} has already been consumed and cannot be reused"
-        ))
-    })
+fn default_value_from_payload<'py>(
+    payload: &Bound<'py, PyAny>,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let has_default: bool = payload.getattr("has_default")?.extract()?;
+    if has_default {
+        Ok(Some(payload.getattr("default")?))
+    } else {
+        Ok(None)
+    }
 }
 
-#[pyclass(module = "grommet._core", name = "Field")]
-pub(crate) struct PyField {
-    inner: Option<Field>,
+fn build_input_value(
+    name: String,
+    type_spec: &Bound<'_, PyAny>,
+    default_value: Option<&Bound<'_, PyAny>>,
+    description: Option<&str>,
+) -> PyResult<InputValue> {
+    let type_ref = type_spec_to_type_ref(type_spec)?;
+    let mut iv = InputValue::new(name, type_ref);
+    if let Some(default_value) = default_value {
+        let py_obj = PyObj::new(default_value.clone().unbind());
+        iv = iv.default_value(pyobj_to_value(&py_obj)?);
+    }
+    if let Some(description) = description {
+        iv = iv.description(description);
+    }
+    Ok(iv)
 }
 
-#[pymethods]
-impl PyField {
-    #[new]
-    #[pyo3(signature = (name, type_spec, func, needs_context, is_async, description=None, args=None))]
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        py: Python<'_>,
-        name: String,
-        type_spec: &Bound<'_, PyAny>,
-        func: Py<PyAny>,
-        needs_context: bool,
-        is_async: bool,
-        description: Option<String>,
-        args: FieldArgSpecs<'_>,
-    ) -> PyResult<Self> {
-        let type_ref = type_spec_to_type_ref(type_spec)?;
+fn build_argument_input_value(arg: &Bound<'_, PyAny>) -> PyResult<InputValue> {
+    let name: String = arg.getattr("name")?.extract()?;
+    let type_spec = arg.getattr("type_spec")?;
+    let default_value = default_value_from_payload(arg)?;
+    build_input_value(name, &type_spec, default_value.as_ref(), None)
+}
+
+fn build_input_field_value(field: &Bound<'_, PyAny>) -> PyResult<InputValue> {
+    let name: String = field.getattr("name")?.extract()?;
+    let type_spec = field.getattr("type_spec")?;
+    let description: Option<String> = field.getattr("description")?.extract()?;
+    let default_value = default_value_from_payload(field)?;
+    build_input_value(
+        name,
+        &type_spec,
+        default_value.as_ref(),
+        description.as_deref(),
+    )
+}
+
+fn build_object_field(py: Python<'_>, field: &Bound<'_, PyAny>) -> PyResult<Field> {
+    let name: String = field.getattr("name")?.extract()?;
+    let type_spec = field.getattr("type_spec")?;
+    let type_ref = type_spec_to_type_ref(&type_spec)?;
+    let description: Option<String> = field.getattr("description")?.extract()?;
+    let is_data_field = field.hasattr("resolver_func")?;
+
+    let mut graphql_field = if is_data_field {
+        let func: Py<PyAny> = field.getattr("resolver_func")?.extract()?;
+        let field_ctx = build_field_context(py, func, false, false, &type_ref)?;
+        Field::new(name, type_ref, move |ctx| {
+            let result = resolve_field_sync_fast(&ctx, &field_ctx);
+            match result {
+                Ok(value) => FieldFuture::Value(Some(value)),
+                Err(err) => FieldFuture::new(async move { Err::<Option<FieldValue<'_>>, _>(err) }),
+            }
+        })
+    } else {
+        let func: Py<PyAny> = field.getattr("func")?.extract()?;
+        let needs_context: bool = field.getattr("needs_context")?.extract()?;
+        let is_async: bool = field.getattr("is_async")?.extract()?;
         let field_ctx = build_field_context(py, func, needs_context, false, &type_ref)?;
 
-        let mut field = Field::new(name, type_ref, move |ctx| {
+        let mut graphql_field = Field::new(name, type_ref, move |ctx| {
             if is_async {
                 let field_ctx = field_ctx.clone();
                 FieldFuture::new(async move { resolve_field(ctx, field_ctx).await })
             } else {
                 let result = resolve_field_sync_fast(&ctx, &field_ctx);
                 match result {
-                    Ok(v) => FieldFuture::Value(Some(v)),
-                    Err(e) => FieldFuture::new(async move { Err::<Option<FieldValue<'_>>, _>(e) }),
+                    Ok(value) => FieldFuture::Value(Some(value)),
+                    Err(err) => {
+                        FieldFuture::new(async move { Err::<Option<FieldValue<'_>>, _>(err) })
+                    }
                 }
             }
         });
 
-        if let Some(desc) = description.as_deref() {
-            field = field.description(desc);
+        let args: Vec<Py<PyAny>> = field.getattr("args")?.extract()?;
+        for arg in &args {
+            let iv = build_argument_input_value(arg.bind(py))?;
+            graphql_field = graphql_field.argument(iv);
         }
 
-        if let Some(arg_list) = args {
-            for (arg_name, arg_type_spec, arg_default) in &arg_list {
-                let iv = build_input_value(arg_name.clone(), arg_type_spec, arg_default.as_ref())?;
-                field = field.argument(iv);
-            }
-        }
+        graphql_field
+    };
 
-        Ok(PyField { inner: Some(field) })
+    if let Some(description) = description.as_deref() {
+        graphql_field = graphql_field.description(description);
     }
+
+    Ok(graphql_field)
 }
 
-impl PyField {
-    pub(crate) fn consume(&mut self) -> PyResult<Field> {
-        take_inner(&mut self.inner, "Field")
+fn build_subscription_field(
+    py: Python<'_>,
+    field: &Bound<'_, PyAny>,
+) -> PyResult<SubscriptionField> {
+    let name: String = field.getattr("name")?.extract()?;
+    let type_spec = field.getattr("type_spec")?;
+    let type_ref = type_spec_to_type_ref(&type_spec)?;
+    let func: Py<PyAny> = field.getattr("func")?.extract()?;
+    let needs_context: bool = field.getattr("needs_context")?.extract()?;
+    let description: Option<String> = field.getattr("description")?.extract()?;
+    let field_ctx = build_field_context(py, func, needs_context, true, &type_ref)?;
+
+    let mut graphql_field = SubscriptionField::new(name, type_ref, move |ctx| {
+        let field_ctx = field_ctx.clone();
+        SubscriptionFieldFuture::new(
+            async move { resolve_subscription_stream(ctx, field_ctx).await },
+        )
+    });
+
+    let args: Vec<Py<PyAny>> = field.getattr("args")?.extract()?;
+    for arg in &args {
+        let iv = build_argument_input_value(arg.bind(py))?;
+        graphql_field = graphql_field.argument(iv);
     }
-}
 
-#[pyclass(module = "grommet._core", name = "SubscriptionField")]
-pub(crate) struct PySubscriptionField {
-    inner: Option<SubscriptionField>,
-}
-
-#[pymethods]
-impl PySubscriptionField {
-    #[new]
-    #[pyo3(signature = (name, type_spec, func, needs_context, description=None, args=None))]
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        py: Python<'_>,
-        name: String,
-        type_spec: &Bound<'_, PyAny>,
-        func: Py<PyAny>,
-        needs_context: bool,
-        description: Option<String>,
-        args: FieldArgSpecs<'_>,
-    ) -> PyResult<Self> {
-        let type_ref = type_spec_to_type_ref(type_spec)?;
-        let field_ctx = build_field_context(py, func, needs_context, true, &type_ref)?;
-
-        let mut field = SubscriptionField::new(name, type_ref, move |ctx| {
-            let field_ctx = field_ctx.clone();
-            SubscriptionFieldFuture::new(async move {
-                resolve_subscription_stream(ctx, field_ctx).await
-            })
-        });
-
-        if let Some(desc) = description.as_deref() {
-            field = field.description(desc);
-        }
-
-        if let Some(arg_list) = args {
-            for (arg_name, arg_type_spec, arg_default) in &arg_list {
-                let iv = build_input_value(arg_name.clone(), arg_type_spec, arg_default.as_ref())?;
-                field = field.argument(iv);
-            }
-        }
-
-        Ok(PySubscriptionField { inner: Some(field) })
+    if let Some(description) = description.as_deref() {
+        graphql_field = graphql_field.description(description);
     }
+
+    Ok(graphql_field)
 }
 
-impl PySubscriptionField {
-    pub(crate) fn consume(&mut self) -> PyResult<SubscriptionField> {
-        take_inner(&mut self.inner, "SubscriptionField")
+fn build_object_type(
+    py: Python<'_>,
+    compiled_type: &Bound<'_, PyAny>,
+    type_name: &str,
+    description: Option<&str>,
+) -> PyResult<Object> {
+    let mut object = Object::new(type_name);
+    if let Some(description) = description {
+        object = object.description(description);
     }
-}
 
-#[pyclass(module = "grommet._core", name = "InputValue")]
-pub(crate) struct PyInputValue {
-    inner: Option<InputValue>,
-}
-
-#[pymethods]
-impl PyInputValue {
-    #[new]
-    #[pyo3(signature = (name, type_spec, default_value=None, description=None))]
-    fn new(
-        name: String,
-        type_spec: &Bound<'_, PyAny>,
-        default_value: Option<&Bound<'_, PyAny>>,
-        description: Option<String>,
-    ) -> PyResult<Self> {
-        let type_ref = type_spec_to_type_ref(type_spec)?;
-        let mut iv = InputValue::new(name, type_ref);
-        if let Some(dv) = default_value {
-            let py_obj = PyObj::new(dv.clone().unbind());
-            iv = iv.default_value(pyobj_to_value(&py_obj)?);
-        }
-        if let Some(desc) = description.as_deref() {
-            iv = iv.description(desc);
-        }
-        Ok(PyInputValue { inner: Some(iv) })
+    let fields: Vec<Py<PyAny>> = compiled_type.getattr("object_fields")?.extract()?;
+    for field in &fields {
+        object = object.field(build_object_field(py, field.bind(py))?);
     }
+
+    Ok(object)
 }
 
-impl PyInputValue {
-    pub(crate) fn consume(&mut self) -> PyResult<InputValue> {
-        take_inner(&mut self.inner, "InputValue")
+fn build_input_object_type(
+    py: Python<'_>,
+    compiled_type: &Bound<'_, PyAny>,
+    type_name: &str,
+    description: Option<&str>,
+) -> PyResult<InputObject> {
+    let mut input_object = InputObject::new(type_name);
+    if let Some(description) = description {
+        input_object = input_object.description(description);
     }
-}
 
-#[pyclass(module = "grommet._core", name = "Object")]
-pub(crate) struct PyObject {
-    inner: Option<Object>,
-}
-
-#[pymethods]
-impl PyObject {
-    #[new]
-    #[pyo3(signature = (name, description=None, fields=None))]
-    fn new(
-        name: String,
-        description: Option<String>,
-        fields: Option<Vec<Bound<'_, PyField>>>,
-    ) -> PyResult<Self> {
-        let mut obj = Object::new(&name);
-        if let Some(desc) = description.as_deref() {
-            obj = obj.description(desc);
-        }
-        if let Some(field_list) = fields {
-            for f in field_list {
-                let field = f.borrow_mut().consume()?;
-                obj = obj.field(field);
-            }
-        }
-        Ok(PyObject { inner: Some(obj) })
+    let fields: Vec<Py<PyAny>> = compiled_type.getattr("input_fields")?.extract()?;
+    for field in &fields {
+        input_object = input_object.field(build_input_field_value(field.bind(py))?);
     }
+
+    Ok(input_object)
 }
 
-impl PyObject {
-    pub(crate) fn consume(&mut self) -> PyResult<Object> {
-        take_inner(&mut self.inner, "Object")
+fn build_subscription_type(
+    py: Python<'_>,
+    compiled_type: &Bound<'_, PyAny>,
+    type_name: &str,
+    description: Option<&str>,
+) -> PyResult<Subscription> {
+    let mut subscription = Subscription::new(type_name);
+    if let Some(description) = description {
+        subscription = subscription.description(description);
     }
-}
 
-#[pyclass(module = "grommet._core", name = "InputObject")]
-pub(crate) struct PyInputObject {
-    inner: Option<InputObject>,
-}
-
-#[pymethods]
-impl PyInputObject {
-    #[new]
-    #[pyo3(signature = (name, description=None, fields=None))]
-    fn new(
-        name: String,
-        description: Option<String>,
-        fields: Option<Vec<Bound<'_, PyInputValue>>>,
-    ) -> PyResult<Self> {
-        let mut obj = InputObject::new(&name);
-        if let Some(desc) = description.as_deref() {
-            obj = obj.description(desc);
-        }
-        if let Some(field_list) = fields {
-            for iv in field_list {
-                let input_value = iv.borrow_mut().consume()?;
-                obj = obj.field(input_value);
-            }
-        }
-        Ok(PyInputObject { inner: Some(obj) })
+    let fields: Vec<Py<PyAny>> = compiled_type.getattr("subscription_fields")?.extract()?;
+    for field in &fields {
+        subscription = subscription.field(build_subscription_field(py, field.bind(py))?);
     }
-}
 
-impl PyInputObject {
-    pub(crate) fn consume(&mut self) -> PyResult<InputObject> {
-        take_inner(&mut self.inner, "InputObject")
-    }
-}
-
-#[pyclass(module = "grommet._core", name = "Subscription")]
-pub(crate) struct PySubscription {
-    inner: Option<Subscription>,
-}
-
-#[pymethods]
-impl PySubscription {
-    #[new]
-    #[pyo3(signature = (name, description=None, fields=None))]
-    fn new(
-        name: String,
-        description: Option<String>,
-        fields: Option<Vec<Bound<'_, PySubscriptionField>>>,
-    ) -> PyResult<Self> {
-        let mut obj = Subscription::new(&name);
-        if let Some(desc) = description.as_deref() {
-            obj = obj.description(desc);
-        }
-        if let Some(field_list) = fields {
-            for sf in field_list {
-                let sub_field = sf.borrow_mut().consume()?;
-                obj = obj.field(sub_field);
-            }
-        }
-        Ok(PySubscription { inner: Some(obj) })
-    }
-}
-
-impl PySubscription {
-    pub(crate) fn consume(&mut self) -> PyResult<Subscription> {
-        take_inner(&mut self.inner, "Subscription")
-    }
+    Ok(subscription)
 }
 
 pub(crate) enum RegistrableType {
@@ -337,20 +270,68 @@ pub(crate) enum RegistrableType {
     Subscription(Subscription),
 }
 
+fn decode_type_kind(meta: &Bound<'_, PyAny>) -> PyResult<String> {
+    let kind = meta.getattr("kind")?;
+    kind.getattr("value")?.extract()
+}
+
+fn decode_registrable_type(
+    py: Python<'_>,
+    compiled_type: &Bound<'_, PyAny>,
+) -> PyResult<RegistrableType> {
+    let meta = compiled_type
+        .getattr("meta")
+        .map_err(|_| unsupported_registration_type())?;
+    let kind = decode_type_kind(&meta).map_err(|_| unsupported_registration_type())?;
+    let type_name: String = meta
+        .getattr("name")
+        .and_then(|value| value.extract())
+        .map_err(|_| unsupported_registration_type())?;
+    let description: Option<String> = meta
+        .getattr("description")
+        .and_then(|value| value.extract())
+        .map_err(|_| unsupported_registration_type())?;
+
+    match kind.as_str() {
+        "object" => Ok(RegistrableType::Object(build_object_type(
+            py,
+            compiled_type,
+            &type_name,
+            description.as_deref(),
+        )?)),
+        "input" => Ok(RegistrableType::InputObject(build_input_object_type(
+            py,
+            compiled_type,
+            &type_name,
+            description.as_deref(),
+        )?)),
+        "subscription" => Ok(RegistrableType::Subscription(build_subscription_type(
+            py,
+            compiled_type,
+            &type_name,
+            description.as_deref(),
+        )?)),
+        _ => Err(unsupported_registration_type()),
+    }
+}
+
 pub(crate) fn register_schema(
+    py: Python<'_>,
     query: &str,
     mutation: Option<&str>,
     subscription: Option<&str>,
-    types: Vec<RegistrableType>,
+    types: Vec<Py<PyAny>>,
 ) -> PyResult<Schema> {
-    let builder: SchemaBuilder = types.into_iter().fold(
-        Schema::build(query, mutation, subscription),
-        |builder, ty| match ty {
-            RegistrableType::Object(obj) => builder.register(obj),
-            RegistrableType::InputObject(inp) => builder.register(inp),
-            RegistrableType::Subscription(sub) => builder.register(sub),
-        },
-    );
+    let mut builder: SchemaBuilder = Schema::build(query, mutation, subscription);
+
+    for compiled_type in &types {
+        let registrable = decode_registrable_type(py, compiled_type.bind(py))?;
+        builder = match registrable {
+            RegistrableType::Object(object) => builder.register(object),
+            RegistrableType::InputObject(input_object) => builder.register(input_object),
+            RegistrableType::Subscription(subscription) => builder.register(subscription),
+        };
+    }
 
     builder
         .finish()

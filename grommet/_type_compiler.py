@@ -38,10 +38,10 @@ def _get_annotated_field_meta(annotation: "Any") -> Field | None:
 
 
 def _data_field_resolver(
-    field_name: str, default: object
+    field_name: str, *, has_default: bool, default: object | None
 ) -> "Callable[[Any, Any, dict[str, Any]], Any]":
     getter = attrgetter(field_name)
-    if default is MISSING:
+    if not has_default:
         return lambda self, _context, _kwargs: getter(self)
 
     def _resolver(self: object, _context: object, _kwargs: dict[str, object]) -> object:
@@ -52,12 +52,14 @@ def _data_field_resolver(
     return _resolver
 
 
-def _resolve_data_field_default(dc_field: "dataclasses.Field[Any]") -> object:
+def _resolve_data_field_default(
+    dc_field: "dataclasses.Field[Any]",
+) -> tuple[bool, object | None]:
     if dc_field.default is not MISSING:
-        return dc_field.default
+        return True, dc_field.default
     if dc_field.default_factory is not MISSING:
-        return dc_field.default_factory()
-    return MISSING
+        return True, dc_field.default_factory()
+    return False, None
 
 
 def _iter_compiled_resolvers(cls: "pytype") -> list[CompiledResolverField]:
@@ -84,7 +86,69 @@ def _iter_visible_dataclass_fields(
         yield dc_field, annotation, description, refs
 
 
-def compile_type_definition(  # noqa: PLR0912 - orchestrates three compile modes in one pass
+def _compile_subscription_fields(
+    visible_fields: "tuple[tuple[dataclasses.Field[Any], Any, str | None, frozenset[pytype]], ...]",
+    subscription_resolvers: list[CompiledResolverField],
+) -> tuple[CompiledResolverField, ...]:
+    if visible_fields:
+        raise GrommetTypeError("Subscription types cannot declare data fields.")
+    return tuple(subscription_resolvers)
+
+
+def _compile_input_fields(
+    visible_fields: "tuple[tuple[dataclasses.Field[Any], Any, str | None, frozenset[pytype]], ...]",
+) -> tuple[CompiledInputField, ...]:
+    fields: list[CompiledInputField] = []
+    for dc_field, annotation, desc, field_refs in visible_fields:
+        force_nullable = (
+            dc_field.default is not MISSING or dc_field.default_factory is not MISSING
+        )
+        type_spec = _type_spec_from_annotation(
+            annotation, expect_input=True, force_nullable=force_nullable
+        )
+        default_value = _input_field_default(dc_field, annotation)
+        has_default = default_value is not MISSING
+        fields.append(
+            CompiledInputField(
+                name=dc_field.name,
+                type_spec=type_spec,
+                description=desc,
+                has_default=has_default,
+                default=default_value if has_default else None,
+                refs=field_refs,
+            )
+        )
+    return tuple(fields)
+
+
+def _compile_object_fields(
+    visible_fields: "tuple[tuple[dataclasses.Field[Any], Any, str | None, frozenset[pytype]], ...]",
+    field_resolvers: list[CompiledResolverField],
+) -> tuple[CompiledDataField | CompiledResolverField, ...]:
+    fields: list[CompiledDataField | CompiledResolverField] = []
+    for dc_field, annotation, desc, field_refs in visible_fields:
+        type_spec = _type_spec_from_annotation(
+            annotation, expect_input=False, force_nullable=dc_field.default is None
+        )
+        has_default, default = _resolve_data_field_default(dc_field)
+        fields.append(
+            CompiledDataField(
+                name=dc_field.name,
+                type_spec=type_spec,
+                description=desc,
+                has_default=has_default,
+                default=default,
+                resolver_func=_data_field_resolver(
+                    dc_field.name, has_default=has_default, default=default
+                ),
+                refs=field_refs,
+            )
+        )
+    fields.extend(field_resolvers)
+    return tuple(fields)
+
+
+def compile_type_definition(
     cls: "pytype", *, kind: TypeKind, name: str | None, description: str | None
 ) -> CompiledType:
     """Compile a decorated class into immutable metadata used at schema build time."""
@@ -114,50 +178,18 @@ def compile_type_definition(  # noqa: PLR0912 - orchestrates three compile modes
     for _dc_field, _annotation, _desc, field_refs in visible_fields:
         refs.extend(field_refs)
 
-    object_fields: list[CompiledDataField | CompiledResolverField] = []
-    input_fields: list[CompiledInputField] = []
+    object_fields: tuple[CompiledDataField | CompiledResolverField, ...] = ()
+    input_fields: tuple[CompiledInputField, ...] = ()
     subscription_fields: tuple[CompiledResolverField, ...] = ()
 
     if resolved_kind is TypeKind.SUBSCRIPTION:
-        if visible_fields:
-            raise GrommetTypeError("Subscription types cannot declare data fields.")
-        subscription_fields = tuple(subscription_resolvers)
+        subscription_fields = _compile_subscription_fields(
+            visible_fields, subscription_resolvers
+        )
     elif resolved_kind is TypeKind.INPUT:
-        for dc_field, annotation, desc, field_refs in visible_fields:
-            force_nullable = (
-                dc_field.default is not MISSING
-                or dc_field.default_factory is not MISSING
-            )
-            type_spec = _type_spec_from_annotation(
-                annotation, expect_input=True, force_nullable=force_nullable
-            )
-            default_value = _input_field_default(dc_field, annotation)
-            input_fields.append(
-                CompiledInputField(
-                    name=dc_field.name,
-                    type_spec=type_spec,
-                    description=desc,
-                    default=default_value,
-                    refs=field_refs,
-                )
-            )
+        input_fields = _compile_input_fields(visible_fields)
     else:
-        for dc_field, annotation, desc, field_refs in visible_fields:
-            type_spec = _type_spec_from_annotation(
-                annotation, expect_input=False, force_nullable=dc_field.default is None
-            )
-            default_value = _resolve_data_field_default(dc_field)
-            object_fields.append(
-                CompiledDataField(
-                    name=dc_field.name,
-                    type_spec=type_spec,
-                    description=desc,
-                    default=default_value,
-                    resolver_func=_data_field_resolver(dc_field.name, default_value),
-                    refs=field_refs,
-                )
-            )
-        object_fields.extend(field_resolvers)
+        object_fields = _compile_object_fields(visible_fields, field_resolvers)
 
     resolver_ref_sources = (
         tuple(field_resolvers)
@@ -170,9 +202,9 @@ def compile_type_definition(  # noqa: PLR0912 - orchestrates three compile modes
     meta = TypeMeta(kind=resolved_kind, name=type_name, description=description)
     compiled = CompiledType(
         meta=meta,
-        object_fields=tuple(object_fields),
+        object_fields=object_fields,
         subscription_fields=subscription_fields,
-        input_fields=tuple(input_fields),
+        input_fields=input_fields,
         refs=frozenset(refs),
     )
 

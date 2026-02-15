@@ -18,7 +18,6 @@ from grommet._compiled import (
     CompiledResolverField,
     CompiledType,
 )
-from grommet.metadata import TypeSpec
 
 
 async def _await_free(self):
@@ -112,9 +111,10 @@ def test_field_decorator_compiles_resolver_metadata():
 
     assert isinstance(compiled, CompiledResolverField)
     assert compiled.kind == "field"
-    assert compiled.shape == "self_only"
     assert compiled.needs_context is False
     assert compiled.is_async is False
+    assert not hasattr(compiled, "shape")
+    assert not hasattr(compiled, "arg_names")
     assert compiled.func is not resolver
     assert compiled.func(None, None, {}) == 1
 
@@ -166,9 +166,10 @@ def test_subscription_decorator_compiles_resolver_metadata():
 
     assert isinstance(compiled, CompiledResolverField)
     assert compiled.kind == "subscription"
-    assert compiled.shape == "self_and_args"
     assert compiled.needs_context is False
     assert compiled.is_async is True
+    assert not hasattr(compiled, "shape")
+    assert not hasattr(compiled, "arg_names")
 
 
 def test_compiled_adapter_handles_all_call_modes():
@@ -309,22 +310,19 @@ def test_same_compiled_type_supports_multiple_schemas():
     assert result2.data == {"greeting": "Hello B"}
 
 
-def test_runtime_does_not_use_shape_or_arg_names():
-    original = getattr(CompiledQuery, COMPILED_TYPE_ATTR)
-    resolver_field = original.object_fields[0]
-    assert isinstance(resolver_field, CompiledResolverField)
+def test_core_schema_accepts_compiled_type_metadata_bundle():
+    @dataclass
+    class DirectBundle:
+        query: str = "CompiledQuery"
+        mutation: str | None = None
+        subscription: str | None = None
+        types: list[object] = dataclasses.field(
+            default_factory=lambda: [getattr(CompiledQuery, COMPILED_TYPE_ATTR)]
+        )
 
-    mutated_resolver = dataclasses.replace(
-        resolver_field, shape="self_only", arg_names=("totally_wrong",)
-    )
-    mutated_type = dataclasses.replace(original, object_fields=(mutated_resolver,))
-    setattr(CompiledQuery, COMPILED_TYPE_ATTR, mutated_type)
-    try:
-        schema = grommet.Schema(query=CompiledQuery)
-        result = asyncio.run(schema.execute('{ greeting(name: "Gromit") }'))
-        assert result.data == {"greeting": "Hello Gromit"}
-    finally:
-        setattr(CompiledQuery, COMPILED_TYPE_ATTR, original)
+    schema = _core.Schema(DirectBundle())
+    result = asyncio.run(schema.execute('{ greeting(name: "Gromit") }', None, None))
+    assert result.data == {"greeting": "Hello Gromit"}
 
 
 def test_core_schema_rejects_unknown_registration_type():
@@ -339,17 +337,16 @@ def test_core_schema_rejects_unknown_registration_type():
         _core.Schema(BadBundle())
 
 
-def test_core_wrapper_double_consume_fails_fast():
-    field = _core.Field(
-        "name",
-        TypeSpec(kind="named", name="String"),
-        lambda parent, context, kwargs: "ok",
-        False,
-        False,
-    )
-    _core.Object("First", fields=[field])
-    with pytest.raises(TypeError, match="already been consumed"):
-        _core.Object("Second", fields=[field])
+def test_core_builder_classes_are_not_exposed():
+    for name in (
+        "Field",
+        "SubscriptionField",
+        "InputValue",
+        "Object",
+        "InputObject",
+        "Subscription",
+    ):
+        assert not hasattr(_core, name)
 
 
 @grommet.type

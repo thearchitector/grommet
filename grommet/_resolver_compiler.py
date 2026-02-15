@@ -13,7 +13,6 @@ from .annotations import (
 from .coercion import _arg_coercer, _default_value_for_annotation
 from .context import Context
 from .errors import resolver_missing_annotation, resolver_requires_async
-from .metadata import MISSING
 
 if TYPE_CHECKING:
     from builtins import type as pytype
@@ -21,12 +20,6 @@ if TYPE_CHECKING:
     from typing import Any, Literal
 
 _MIN_CONTEXT_PARAMS = 2
-_SHAPE_BY_RESOLVER_SIGNATURE = {
-    (False, False): "self_only",
-    (False, True): "self_and_args",
-    (True, False): "self_and_context",
-    (True, True): "self_context_and_args",
-}
 
 
 def _resolver_params(resolver: "Callable[..., Any]") -> list[inspect.Parameter]:
@@ -99,11 +92,19 @@ def _build_arg_info(
             annotation, expect_input=True, force_nullable=force_nullable
         )
 
-        default: object = MISSING
-        if param.default is not inspect._empty:
+        has_default = param.default is not inspect._empty
+        default: object | None = None
+        if has_default:
             default = _default_value_for_annotation(annotation, param.default)
 
-        args.append(CompiledArg(name=param.name, type_spec=type_spec, default=default))
+        args.append(
+            CompiledArg(
+                name=param.name,
+                type_spec=type_spec,
+                has_default=has_default,
+                default=default,
+            )
+        )
 
     return arg_names, coercers, args
 
@@ -152,8 +153,6 @@ def compile_resolver_field(
     arg_names, coercers, args = _build_arg_info(
         resolver_name, params[arg_start:], hints
     )
-    shape = _SHAPE_BY_RESOLVER_SIGNATURE[(has_context, bool(arg_names))]
-
     is_coroutine = inspect.iscoroutinefunction(resolver)
     is_async = kind == "subscription" or is_coroutine
     func = resolver
@@ -183,8 +182,6 @@ def compile_resolver_field(
         name=field_name,
         func=func,
         needs_context=has_context,
-        shape=shape,
-        arg_names=arg_names_tuple,
         is_async=is_async,
         type_spec=type_spec,
         description=description,

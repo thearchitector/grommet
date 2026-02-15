@@ -9,10 +9,7 @@ use async_graphql::{Request, Variables};
 use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
 
-use crate::errors::py_type_error;
-use crate::schema_types::{
-    PyInputObject, PyObject, PySubscription, RegistrableType, register_schema,
-};
+use crate::schema_types::register_schema;
 use crate::types::{PyObj, StateValue};
 use crate::values::{py_to_value, response_to_py};
 
@@ -71,23 +68,13 @@ impl SchemaWrapper {
         let subscription: Option<String> = bundle.getattr("subscription")?.extract()?;
         let types_list: Vec<Py<PyAny>> = bundle.getattr("types")?.extract()?;
 
-        let mut types = Vec::with_capacity(types_list.len());
-        for item in &types_list {
-            let bound = item.bind(py);
-            if let Ok(cell) = bound.cast::<PyObject>() {
-                types.push(RegistrableType::Object(cell.borrow_mut().consume()?));
-            } else if let Ok(cell) = bound.cast::<PyInputObject>() {
-                types.push(RegistrableType::InputObject(cell.borrow_mut().consume()?));
-            } else if let Ok(cell) = bound.cast::<PySubscription>() {
-                types.push(RegistrableType::Subscription(cell.borrow_mut().consume()?));
-            } else {
-                return Err(py_type_error(
-                    "Schema bundle contains an unsupported type registration object",
-                ));
-            }
-        }
-
-        let schema = register_schema(&query, mutation.as_deref(), subscription.as_deref(), types)?;
+        let schema = register_schema(
+            py,
+            &query,
+            mutation.as_deref(),
+            subscription.as_deref(),
+            types_list,
+        )?;
         Ok(SchemaWrapper {
             schema: Arc::new(schema),
         })

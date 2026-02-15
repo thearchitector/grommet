@@ -1,7 +1,7 @@
 import dataclasses
 from typing import TYPE_CHECKING, ParamSpec, TypeVar, overload
 
-from ._compiled import COMPILED_RESOLVER_ATTR, META_ATTR, REFS_ATTR
+from ._compiled import COMPILED_RESOLVER_ATTR, REFS_ATTR
 from ._resolver_compiler import compile_resolver_field
 from ._type_compiler import compile_type_definition
 from .errors import GrommetTypeError, dataclass_required, decorator_requires_callable
@@ -14,10 +14,6 @@ if TYPE_CHECKING:
     from builtins import type as pytype
     from collections.abc import Callable
     from typing import Any
-
-_META_ATTR: str = META_ATTR
-_REFS_ATTR: str = REFS_ATTR
-_COMPILED_RESOLVER_ATTR: str = COMPILED_RESOLVER_ATTR
 
 
 def _compile_decorated_type(
