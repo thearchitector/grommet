@@ -47,7 +47,7 @@ impl PythonAwaitableFuture {
 
         let task = Python::attach(|py| -> PyResult<Py<PyAny>> {
             let asyncio = py.import("asyncio")?;
-            let task = match asyncio.call_method1("ensure_future", (self.awaitable.bind(py),)) {
+            let task = match asyncio.call_method1("create_task", (self.awaitable.bind(py),)) {
                 Ok(task) => task,
                 Err(err) => {
                     let _ = self.awaitable.bind(py).call_method0("close");

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Annotated
 
 import strawberry
+import uvloop
 
 import grommet as gm
 
@@ -43,7 +44,7 @@ class Query:
         return [Row(a=i, cells=[Cell(j=j) for j in range(5)]) for i in range(100000)]
 
 
-asyncio.run(run_bench("strawberry", strawberry.Schema(query=Query)))
+uvloop.run(run_bench("strawberry", strawberry.Schema(query=Query)))
 
 
 @gm.type
@@ -72,4 +73,4 @@ class Query:
         return [Row(a=i, cells=[Cell(j=j) for j in range(5)]) for i in range(100000)]
 
 
-asyncio.run(run_bench("grommet", gm.Schema(query=Query)))
+uvloop.run(run_bench("grommet", gm.Schema(query=Query)))

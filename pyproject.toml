@@ -40,6 +40,7 @@ dev = [
 ]
 perf = [
     "strawberry-graphql",
+    "uvloop>=0.22.1",
 ]
 
 [tool.pytest.ini_options]
