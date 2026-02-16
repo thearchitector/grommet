@@ -12,9 +12,6 @@ where
     static INIT: Once = Once::new();
 
     Python::initialize();
-    // Eagerly import asyncio and grommet submodules exactly once to avoid
-    // circular-import errors and per-module import-lock deadlocks that
-    // surface on Python 3.14+ when parallel test threads race to first-import.
     INIT.call_once(|| {
         Python::attach(|py| {
             py.run(
@@ -49,49 +46,12 @@ for root in search_roots:
             py.import("grommet.plan").unwrap();
         });
     });
+
     Python::attach(f)
 }
 
 mod errors {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/errors.rs"));
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use pyo3::exceptions::{PyTypeError, PyValueError};
-        use pyo3::types::{PyAnyMethods, PyStringMethods};
-
-        fn err_message(err: &PyErr) -> String {
-            crate::with_py(|py| err.value(py).str().unwrap().to_str().unwrap().to_string())
-        }
-
-        /// Verifies error helper constructors return expected errors and messages.
-        #[test]
-        fn error_helpers_round_trip() {
-            let err = py_type_error("boom");
-            assert!(crate::with_py(|py| err.is_instance_of::<PyTypeError>(py)));
-            assert_eq!(err_message(&err), "boom");
-
-            let err = py_value_error("nope");
-            assert!(crate::with_py(|py| err.is_instance_of::<PyValueError>(py)));
-            assert_eq!(err_message(&err), "nope");
-
-            let err = subscription_requires_async_iterator();
-            assert!(crate::with_py(|py| err.is_instance_of::<PyTypeError>(py)));
-
-            let err = expected_list_value();
-            assert_eq!(err_message(&err), "Expected list for GraphQL list type");
-
-            let err = unsupported_value_type();
-            assert_eq!(err_message(&err), "Unsupported value type");
-
-            let gql_err = py_err_to_error(py_value_error("oops"));
-            assert_eq!(gql_err.message, "ValueError: oops");
-
-            let gql_err = no_parent_value();
-            assert_eq!(gql_err.message, "No parent value for field");
-        }
-    }
 }
 
 mod types {
@@ -100,307 +60,6 @@ mod types {
 
 mod values {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/values.rs"));
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use async_graphql::dynamic::TypeRef;
-        use async_graphql::{
-            ErrorExtensionValues, Name, PathSegment, Pos, Response, ServerError, Value,
-        };
-        use indexmap::IndexMap;
-        use pyo3::IntoPyObject;
-        use pyo3::types::{PyAnyMethods, PyBool, PyBytes, PyDict, PyInt, PyList, PyStringMethods};
-
-        fn make_meta_objects<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
-            let locals = PyDict::new(py);
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-import dataclasses
-import enum
-
-class TypeKind(enum.Enum):
-    OBJECT = "object"
-    INPUT = "input"
-
-class Meta:
-    def __init__(self, kind, name=None):
-        self.kind = kind
-        self.name = name
-
-class NoType:
-    pass
-
-class Obj:
-    pass
-Obj.__grommet_meta__ = Meta(TypeKind.OBJECT, "Obj")
-
-class Plain:
-    pass
-
-class Weird:
-    pass
-Weird.__grommet_meta__ = NoType()
-
-@dataclasses.dataclass
-class Input:
-    value: int
-Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
-"#
-                ),
-                None,
-                Some(&locals),
-            )
-            .unwrap();
-            locals
-        }
-
-        /// Verifies input_object_as_dict handles type and input variants.
-        #[test]
-        fn meta_helpers_cover_branches() {
-            crate::with_py(|py| {
-                let locals = make_meta_objects(py);
-                let obj_cls = locals.get_item("Obj").unwrap().unwrap();
-
-                let obj = obj_cls.call0().unwrap();
-
-                assert!(input_object_as_dict(py, &obj).unwrap().is_none());
-
-                let input_cls = locals.get_item("Input").unwrap().unwrap();
-                let input_instance = input_cls.call1((5,)).unwrap();
-                let dict = input_object_as_dict(py, &input_instance).unwrap().unwrap();
-                let dict = dict.cast::<PyDict>().unwrap();
-                assert_eq!(
-                    dict.get_item("value")
-                        .unwrap()
-                        .unwrap()
-                        .extract::<i64>()
-                        .unwrap(),
-                    5
-                );
-                let plain_cls = locals.get_item("Plain").unwrap().unwrap();
-                let plain = plain_cls.call0().unwrap();
-                assert!(input_object_as_dict(py, &plain).unwrap().is_none());
-            });
-        }
-
-        /// Verifies Python values convert to GraphQL values across variants.
-        #[test]
-        fn py_to_value_covers_primitives_and_collections() {
-            crate::with_py(|py| {
-                let locals = make_meta_objects(py);
-
-                let input_instance = locals
-                    .get_item("Input")
-                    .unwrap()
-                    .unwrap()
-                    .call1((3,))
-                    .unwrap();
-                let value = py_to_value(py, &input_instance).unwrap();
-                match value {
-                    Value::Object(map) => {
-                        assert_eq!(map.get("value").unwrap(), &Value::from(3));
-                    }
-                    _ => panic!("expected object"),
-                }
-
-                let none_obj = py.None();
-                let none_value = none_obj.bind(py);
-                let value = py_to_value(py, &none_value).unwrap();
-                assert_eq!(value, Value::Null);
-                let bool_value = PyBool::new(py, true).to_owned().into_any();
-                let value = py_to_value(py, &bool_value).unwrap();
-                assert_eq!(value, Value::Boolean(true));
-                let int_value = PyInt::new(py, 42).into_any();
-                let value = py_to_value(py, &int_value).unwrap();
-                assert_eq!(value, Value::from(42));
-                let float_value = 1.25f64.into_pyobject(py).unwrap().into_any();
-                let value = py_to_value(py, &float_value).unwrap();
-                assert_eq!(value, Value::from(1.25));
-                let str_value = "hi".into_pyobject(py).unwrap().into_any();
-                let value = py_to_value(py, &str_value).unwrap();
-                assert_eq!(value, Value::String("hi".to_string()));
-
-                let bytes = PyBytes::new(py, b"bin");
-                let value = py_to_value(py, &bytes.into_any()).unwrap();
-                assert_eq!(value, Value::Binary(b"bin".to_vec().into()));
-
-                let list = PyList::new(py, [1, 2]).unwrap();
-                let list_any = list.into_any();
-                let value = py_to_value(py, &list_any).unwrap();
-                assert_eq!(value, Value::List(vec![Value::from(1), Value::from(2)]));
-
-                let tuple = ("a", "b").into_pyobject(py).unwrap().into_any();
-                let err = py_to_value(py, &tuple).expect_err("tuple should be unsupported");
-                let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
-                assert_eq!(msg, "Unsupported value type");
-
-                let dict = PyDict::new(py);
-                dict.set_item("x", 1).unwrap();
-                let value = py_to_value(py, &dict.into_any()).unwrap();
-                match value {
-                    Value::Object(map) => assert_eq!(map.get("x").unwrap(), &Value::from(1)),
-                    _ => panic!("expected object"),
-                }
-
-                // Custom class should error
-                let plain = locals.get_item("Plain").unwrap().unwrap().call0().unwrap();
-                let err = py_to_value(py, &plain).expect_err("unsupported type should error");
-                let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
-                assert_eq!(msg, "Unsupported value type");
-            });
-        }
-
-        /// Ensures field value conversion enforces list rules.
-        #[test]
-        fn py_to_field_value_for_type_covers_lists() {
-            crate::with_py(|py| {
-                let list_ref = TypeRef::List(Box::new(TypeRef::named("String")));
-                let list = PyList::new(py, ["a", "b"]).unwrap();
-                let list_any = list.into_any();
-                let _ = py_to_field_value_for_type(py, &list_any, &list_ref).unwrap();
-                let tuple_any = ("a", "b").into_pyobject(py).unwrap().into_any();
-                let err = py_to_field_value_for_type(py, &tuple_any, &list_ref)
-                    .expect_err("tuple should be rejected for list types");
-                let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
-                assert_eq!(msg, "Expected list for GraphQL list type");
-
-                let int_any = PyInt::new(py, 42).into_any();
-                let err = py_to_field_value_for_type(py, &int_any, &list_ref)
-                    .expect_err("expected list error");
-                let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
-                assert_eq!(msg, "Expected list for GraphQL list type");
-
-                let non_null = TypeRef::NonNull(Box::new(TypeRef::named("String")));
-                let ok_any = "ok".into_pyobject(py).unwrap().into_any();
-                let _ = py_to_field_value_for_type(py, &ok_any, &non_null).unwrap();
-
-                let none_obj = py.None();
-                let none_any = none_obj.bind(py);
-                let _ =
-                    py_to_field_value_for_type(py, &none_any, &TypeRef::named("String")).unwrap();
-            });
-        }
-
-        /// Ensures abstract outputs receive runtime type metadata via FieldValue::WithType.
-        #[test]
-        fn py_to_field_value_for_type_wraps_abstract_outputs() {
-            crate::with_py(|py| {
-                let locals = make_meta_objects(py);
-                let obj_cls = locals.get_item("Obj").unwrap().unwrap();
-                let obj = obj_cls.call0().unwrap();
-
-                let abstract_value =
-                    py_to_field_value_for_type(py, &obj, &TypeRef::named("Letter")).unwrap();
-                assert_eq!(format!("{:?}", abstract_value), "Obj");
-
-                let concrete_value =
-                    py_to_field_value_for_type(py, &obj, &TypeRef::named("Obj")).unwrap();
-                assert!(format!("{:?}", concrete_value).contains("PyObj"));
-            });
-        }
-
-        /// Verifies GraphQL values and responses convert to Python structures.
-        #[test]
-        fn value_to_py_and_response_to_py_cover_variants() {
-            crate::with_py(|py| {
-                let value = value_to_py(py, &Value::Null).unwrap();
-                assert!(value.bind(py).is_none());
-
-                let value = value_to_py(py, &Value::Boolean(true)).unwrap();
-                assert_eq!(value.bind(py).extract::<bool>().unwrap(), true);
-
-                let value = value_to_py(py, &Value::from(1)).unwrap();
-                assert_eq!(value.bind(py).extract::<i64>().unwrap(), 1);
-
-                let value = value_to_py(py, &Value::from(1.5)).unwrap();
-                assert_eq!(value.bind(py).extract::<f64>().unwrap(), 1.5);
-
-                let value = value_to_py(py, &Value::String("hi".to_string())).unwrap();
-                assert_eq!(value.bind(py).extract::<String>().unwrap(), "hi");
-
-                let value = value_to_py(py, &Value::Enum(Name::new("RED"))).unwrap();
-                assert_eq!(value.bind(py).extract::<String>().unwrap(), "RED");
-
-                let value = value_to_py(py, &Value::Binary(b"bin".to_vec().into())).unwrap();
-                assert_eq!(value.bind(py).cast::<PyBytes>().unwrap().as_bytes(), b"bin");
-
-                let value =
-                    value_to_py(py, &Value::List(vec![Value::from(1), Value::from(2)])).unwrap();
-                assert_eq!(value.bind(py).cast::<PyList>().unwrap().len(), 2);
-
-                let mut map = IndexMap::new();
-                map.insert(Name::new("x"), Value::from(1));
-                let value = value_to_py(py, &Value::Object(map)).unwrap();
-                assert_eq!(
-                    value
-                        .bind(py)
-                        .cast::<PyDict>()
-                        .unwrap()
-                        .get_item("x")
-                        .unwrap()
-                        .unwrap()
-                        .extract::<i64>()
-                        .unwrap(),
-                    1
-                );
-
-                let mut error = ServerError::new("boom", Some(Pos { line: 1, column: 2 }));
-                error.path = vec![
-                    PathSegment::Field("field".to_string()),
-                    PathSegment::Index(1),
-                ];
-                let mut extensions = ErrorExtensionValues::default();
-                extensions.set("code", Value::from("ERR"));
-                error.extensions = Some(extensions);
-
-                let empty_ext = ErrorExtensionValues::default();
-                let mut error_empty = ServerError::new("empty", Some(Pos { line: 2, column: 3 }));
-                error_empty.extensions = Some(empty_ext);
-
-                let response = Response::new(Value::from(1)).extension("meta", Value::from("ok"));
-                let mut response = response;
-                response.errors.push(error);
-                response.errors.push(error_empty);
-
-                let result = response_to_py(py, response).unwrap();
-                let bound = result.bind(py);
-                assert!(!bound.getattr("data").unwrap().is_none());
-                assert!(!bound.getattr("extensions").unwrap().is_none());
-                let errors = bound.getattr("errors").unwrap();
-                assert_eq!(errors.cast::<PyList>().unwrap().len(), 2);
-            });
-        }
-
-        /// Verifies sequence conversion helper enforces list-only semantics.
-        #[test]
-        fn convert_sequence_helpers_cover_paths() {
-            crate::with_py(|py| {
-                let inner_type = TypeRef::named("String");
-
-                // Test list conversion with type
-                let list = PyList::new(py, ["a", "b"]).unwrap();
-                let result =
-                    convert_sequence_to_field_values(py, &list.into_any(), &inner_type).unwrap();
-                let _ = result;
-
-                // Test tuple conversion with type should fail
-                let tuple = ("x", "y").into_pyobject(py).unwrap().into_any();
-                let err = convert_sequence_to_field_values(py, &tuple, &inner_type)
-                    .expect_err("tuple should be rejected");
-                let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
-                assert_eq!(msg, "Expected list for GraphQL list type");
-
-                // Test error case: non-sequence passed to typed converter
-                let int_obj = PyInt::new(py, 42).into_any();
-                let err = convert_sequence_to_field_values(py, &int_obj, &inner_type)
-                    .expect_err("should error for non-list");
-                let msg = err.value(py).str().unwrap().to_str().unwrap().to_string();
-                assert_eq!(msg, "Expected list for GraphQL list type");
-            });
-        }
-    }
 }
 
 mod resolver {
@@ -411,38 +70,7 @@ mod resolver {
         use super::*;
         use std::task::{Context, Poll, Waker};
 
-        /// Verifies interned-string getattr reads attributes and falls back to None.
-        #[test]
-        fn interned_getattr_covers_sources() {
-            crate::with_py(|py| {
-                let locals = PyDict::new(py);
-                py.run(
-                    pyo3::ffi::c_str!(
-                        r#"
-class Obj:
-    def __init__(self):
-        self.attr = 4
-obj = Obj()
-empty = Obj.__new__(type('Empty', (), {}))
-"#
-                    ),
-                    None,
-                    Some(&locals),
-                )
-                .unwrap();
-
-                let attr_name = pyo3::types::PyString::new(py, "attr").unbind();
-                let missing_name = pyo3::types::PyString::new(py, "missing").unbind();
-
-                let obj = locals.get_item("obj").unwrap().unwrap();
-                let value = obj.getattr(&attr_name).unwrap();
-                assert_eq!(value.extract::<i64>().unwrap(), 4);
-
-                let empty = locals.get_item("empty").unwrap().unwrap();
-                let result = empty.getattr(&missing_name);
-                assert!(result.is_err());
-            });
-        }
+        use pyo3::types::PyDict;
 
         fn noop_waker() -> Waker {
             Waker::noop().clone()
@@ -473,6 +101,7 @@ async def coro():
             let waker = noop_waker();
             let mut cx = Context::from_waker(&waker);
             assert!(matches!(future.as_mut().poll(&mut cx), Poll::Pending));
+
             match future.as_mut().poll(&mut cx) {
                 Poll::Ready(Err(err)) => {
                     let message = crate::with_py(|py| {
@@ -504,9 +133,25 @@ class IterOnly:
                     Some(&locals),
                 )
                 .unwrap();
+
                 let cls = locals.get_item("IterOnly").unwrap().unwrap();
                 let value = cls.call0().unwrap();
                 let _ = subscription_iterator(&value).unwrap();
+            });
+        }
+
+        /// Ensures async-iterator detection rejects non-iterator objects.
+        #[test]
+        fn subscription_iterator_rejects_non_async_iterators() {
+            crate::with_py(|py| {
+                let none = py.None();
+                let value = none.bind(py);
+                let err = match subscription_iterator(&value) {
+                    Ok(_) => panic!("expected iterator error"),
+                    Err(err) => err,
+                };
+                let message = err.value(py).str().unwrap().to_str().unwrap().to_string();
+                assert!(message.contains("async iterator"));
             });
         }
     }

@@ -45,7 +45,7 @@ perf = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
-addopts = '-ra -vv --cov=grommet --cov-report=term-missing --cov-report=html'
+addopts = '-ra -vv --cov=grommet --cov-branch --cov-fail-under=100 --cov-report=term-missing --cov-report=html'
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 asyncio_mode = "auto"
@@ -57,12 +57,12 @@ branch = true
 exclude_also = ["if TYPE_CHECKING:"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 strict = true
 exclude = "^tests/|^scripts/|^benchmarks/|^examples/|^dist/|^test\\.py$"
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 extend-include = ["*.md"]
 extend-exclude = ["ai_plans/"]
 
@@ -71,8 +71,8 @@ extend-select = ["B", "I", "ASYNC", "TC", "SIM", "PL"]
 extend-ignore = ["UP037"]
 
 [tool.ruff.lint.per-file-ignores]
-"{tests,benchmarks}/**" = ["TC", "F811"]
-"grommet/decorators.py" = ["PLR0913"]
+"{tests,benchmarks}/**" = ["TC", "F811", "PLR2004"]
+# "grommet/decorators.py" = ["PLR0913"]
 
 [tool.ruff.lint.flake8-type-checking]
 strict = true
