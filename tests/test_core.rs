@@ -385,10 +385,6 @@ Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
     }
 }
 
-mod lookahead {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lookahead.rs"));
-}
-
 mod resolver {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/resolver.rs"));
 

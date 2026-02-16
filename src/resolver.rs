@@ -11,8 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyCFunction, PyDict, PyTupleMethods};
 
 use crate::errors::{py_err_to_error, subscription_requires_async_iterator};
-use crate::lookahead::extract_graph;
-use crate::types::{FieldContext, PyObj, ResolverEntry, StateValue};
+use crate::types::{ContextValue, FieldContext, PyObj, ResolverEntry};
 use crate::values::{py_to_field_value_for_type, value_to_py_bound};
 
 type BoxFut = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
@@ -149,7 +148,7 @@ pub(crate) fn resolve_field_sync_fast<'a>(
 ) -> Result<FieldValue<'a>, Error> {
     let entry = field_ctx.resolver.as_ref().expect("resolver missing");
     Python::attach(|py| {
-        let result = call_resolver_sync(py, ctx, field_ctx, entry)?;
+        let result = call_resolver_sync(py, ctx, entry)?;
         py_to_field_value_for_type(py, result.bind(py), &field_ctx.output_type)
     })
     .map_err(py_err_to_error)
@@ -161,7 +160,7 @@ pub(crate) async fn resolve_field(
     field_ctx: Arc<FieldContext>,
 ) -> Result<Option<FieldValue<'_>>, Error> {
     let entry = field_ctx.resolver.as_ref().expect("resolver missing");
-    let value = resolve_with_resolver(&ctx, &field_ctx, entry).await?;
+    let value = resolve_with_resolver(&ctx, entry).await?;
     let field_value =
         Python::attach(|py| py_to_field_value_for_type(py, value.bind(py), &field_ctx.output_type))
             .map_err(py_err_to_error)?;
@@ -173,7 +172,7 @@ pub(crate) async fn resolve_subscription_stream<'a>(
     field_ctx: Arc<FieldContext>,
 ) -> Result<BoxStream<'a, Result<FieldValue<'a>, Error>>, Error> {
     let entry = field_ctx.resolver.as_ref().expect("resolver missing");
-    let value = resolve_with_resolver(&ctx, &field_ctx, entry).await?;
+    let value = resolve_with_resolver(&ctx, entry).await?;
     let iterator =
         Python::attach(|py| subscription_iterator(value.bind(py))).map_err(py_err_to_error)?;
     subscription_stream(iterator, field_ctx.output_type.clone())
@@ -232,12 +231,11 @@ fn subscription_stream<'a>(
 // Merges call_resolver + into_future into a single GIL block for async resolvers.
 async fn resolve_with_resolver(
     ctx: &ResolverContext<'_>,
-    field_ctx: &FieldContext,
     entry: &ResolverEntry,
 ) -> Result<Py<PyAny>, Error> {
     // Lazy state extraction: only look up state when the resolver needs context
-    let state = if entry.needs_context {
-        ctx.data::<StateValue>().ok().map(|s| s.0.clone())
+    let context = if entry.needs_context {
+        ctx.data::<ContextValue>().ok().map(|s| s.0.clone())
     } else {
         None
     };
@@ -245,15 +243,12 @@ async fn resolve_with_resolver(
 
     if entry.is_async_gen {
         // Async generators (subscriptions): call resolver, return generator directly
-        Python::attach(|py| {
-            call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())
-        })
-        .map_err(py_err_to_error)
+        Python::attach(|py| call_resolver(py, ctx, entry, parent.as_ref(), context.as_ref()))
+            .map_err(py_err_to_error)
     } else {
         // Async coroutine: call resolver + set up future in one GIL block
         let future: BoxFut = Python::attach(|py| {
-            let coroutine =
-                call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())?;
+            let coroutine = call_resolver(py, ctx, entry, parent.as_ref(), context.as_ref())?;
             let bound = coroutine.into_bound(py);
             Ok(awaitable_into_future(bound))
         })
@@ -266,35 +261,15 @@ async fn resolve_with_resolver(
 fn call_resolver_sync(
     py: Python<'_>,
     ctx: &ResolverContext<'_>,
-    field_ctx: &FieldContext,
     entry: &ResolverEntry,
 ) -> PyResult<Py<PyAny>> {
     let parent = ctx.parent_value.try_downcast_ref::<PyObj>().ok().cloned();
-    let state = if entry.needs_context {
-        ctx.data::<StateValue>().ok().map(|s| s.0.clone())
+    let context = if entry.needs_context {
+        ctx.data::<ContextValue>().ok().map(|s| s.0.clone())
     } else {
         None
     };
-    call_resolver(py, ctx, field_ctx, entry, parent.as_ref(), state.as_ref())
-}
-
-fn build_context_obj(
-    py: Python<'_>,
-    ctx: &ResolverContext<'_>,
-    state: Option<&PyObj>,
-    context_cls: &PyObj,
-) -> PyResult<Py<PyAny>> {
-    let graph = extract_graph(ctx);
-    let graph_py = graph.into_pyobject(py)?.into_any().unbind();
-    let state_py = match state {
-        Some(s) => s.clone_ref(py),
-        None => py.None(),
-    };
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("graph", graph_py)?;
-    kwargs.set_item("state", state_py)?;
-    let context_obj = context_cls.bind(py).call((), Some(&kwargs))?;
-    Ok(context_obj.unbind())
+    call_resolver(py, ctx, entry, parent.as_ref(), context.as_ref())
 }
 
 fn build_kwargs<'py>(py: Python<'py>, ctx: &ResolverContext<'_>) -> PyResult<Bound<'py, PyDict>> {
@@ -309,18 +284,19 @@ fn build_kwargs<'py>(py: Python<'py>, ctx: &ResolverContext<'_>) -> PyResult<Bou
 fn call_resolver(
     py: Python<'_>,
     ctx: &ResolverContext<'_>,
-    field_ctx: &FieldContext,
     entry: &ResolverEntry,
     parent: Option<&PyObj>,
-    state: Option<&PyObj>,
+    context: Option<&PyObj>,
 ) -> PyResult<Py<PyAny>> {
     let parent_obj: Py<PyAny> = match parent {
         Some(p) => p.clone_ref(py),
         None => py.None(),
     };
     let context_obj: Py<PyAny> = if entry.needs_context {
-        let cls = field_ctx.context_cls.as_ref().expect("context_cls missing");
-        build_context_obj(py, ctx, state, cls)?
+        match context {
+            Some(value) => value.clone_ref(py),
+            None => py.None(),
+        }
     } else {
         py.None()
     };

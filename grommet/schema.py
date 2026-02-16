@@ -65,15 +65,17 @@ class Schema:
         self._schema = _core.Schema(graph)
 
     async def execute(
-        self, query: str, variables: dict[str, "Any"] | None = None, state: "Any" = None
+        self,
+        query: str,
+        variables: dict[str, "Any"] | None = None,
+        context: "Any" = None,
     ) -> "OperationResult | SubscriptionStream":
         """
         Execute the provided query using the given variables if present. An optional
-        state may be provided, which will be shared with all resolvers in this
-        execution that include a parameter of type `grommet.Context[<StateCls>]`,
-        available under its `state` attribute.
+        context may be provided, which will be shared with all resolvers in this
+        execution that include a parameter of type `grommet.Context[<StateCls>]`.
         """
-        return await self._schema.execute(query, variables, state)
+        return await self._schema.execute(query, variables, context)
 
     @cached_property
     def sdl(self) -> str:

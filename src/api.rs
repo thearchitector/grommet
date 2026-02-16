@@ -10,7 +10,7 @@ use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
 
 use crate::schema_types::register_schema;
-use crate::types::{PyObj, StateValue};
+use crate::types::{ContextValue, PyObj};
 use crate::values::{py_to_value, response_to_py};
 
 #[pyclass(module = "grommet._core", name = "Schema")]
@@ -33,15 +33,15 @@ impl SchemaWrapper {
     fn build_request(
         query: String,
         variables: Option<Py<PyAny>>,
-        state: Option<Py<PyAny>>,
+        context: Option<Py<PyAny>>,
     ) -> PyResult<Request> {
         let vars_value = Self::convert_variables(variables)?;
         let mut request = Request::new(query);
         if let Some(vars) = vars_value {
             request = request.variables(Variables::from_value(vars));
         }
-        if let Some(obj) = state {
-            request = request.data(StateValue(PyObj::new(obj)));
+        if let Some(obj) = context {
+            request = request.data(ContextValue(PyObj::new(obj)));
         }
         Ok(request)
     }
@@ -88,10 +88,10 @@ impl SchemaWrapper {
         &self,
         query: String,
         variables: Option<Py<PyAny>>,
-        state: Option<Py<PyAny>>,
+        context: Option<Py<PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let is_sub = Self::is_subscription(&query);
-        let request = Self::build_request(query, variables, state)?;
+        let request = Self::build_request(query, variables, context)?;
         let schema = self.schema.clone();
 
         if is_sub {

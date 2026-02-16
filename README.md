@@ -177,68 +177,22 @@ async for result in stream:
     # {'counter': 2}
 ```
 
-Store arbitrary operation state using custom context state:
+Store and access arbitrary information using the operation state:
 
 ```python
-@dataclass
-class MyState:
-    request_id: str
-
-
 @grommet.type
 @dataclass
 class Query:
     @grommet.field
-    async def greeting(self, context: grommet.Context[MyState]) -> str:
-        return f"Hello request {context.state.request_id}!"
+    async def greeting(
+        self, context: Annotated[dict[str, str], grommet.Context]
+    ) -> str:
+        return f"Hello request {context['request_id']}!"
 
 
 schema = grommet.Schema(query=Query)
-result = await schema.execute("{ greeting }", state=MyState(request_id="123"))
+result = await schema.execute("{ greeting }", context={"request_id": "123"})
 print(result.data)  # {'greeting': 'Hello request 123!'}
-```
-
-Analyze (and potentially optimize) the current operation by peeking into the execution context:
-
-```python
-@grommet.type
-@dataclass
-class SubObject:
-    @grommet.field
-    async def b(self) -> str:
-        return "foo"
-
-
-@grommet.type
-@dataclass
-class Object:
-    @grommet.field
-    async def a(self) -> int:
-        return 1
-
-    @grommet.field
-    async def sub(self) -> SubObject:
-        return SubObject()
-
-
-@grommet.type
-@dataclass
-class Query:
-    @grommet.field
-    async def obj(self, context: grommet.Context) -> Object:
-        print("obj requests a:", context.graph.requests("a"))
-        print("obj requests b via sub:", context.graph.peek("sub").requests("b"))
-        return Object()
-
-
-schema = grommet.Schema(query=Query)
-await schema.execute("{ obj { a } }")
-# >>> requests a: True
-# >>> requests b: False
-
-await schema.execute("{ obj { sub { b } } }")
-# >>> requests a: False
-# >>> requests b: True
 ```
 
 ## Development

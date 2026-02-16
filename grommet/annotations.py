@@ -2,7 +2,6 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, ClassVar, get_args, get_origin
 
-from .context import Context
 from .errors import (
     async_iterable_requires_parameter,
     input_type_expected,
@@ -11,7 +10,7 @@ from .errors import (
     output_type_expected,
     unsupported_annotation,
 )
-from .metadata import _SCALARS, Hidden, TypeKind, TypeMeta, TypeSpec
+from .metadata import _SCALARS, Context, Hidden, TypeKind, TypeMeta, TypeSpec
 
 if TYPE_CHECKING:
     from builtins import type as pytype
@@ -53,7 +52,7 @@ def analyze_annotation(annotation: "Any") -> AnnotationInfo:
     async_item = args[0] if is_async_iterable and args else None
     is_classvar = origin is ClassVar
     is_hidden = any(x is Hidden for x in metadata)
-    is_context = inner is Context or get_origin(inner) is Context
+    is_context = any(x is Context for x in metadata)
     return AnnotationInfo(
         inner=inner,
         optional=optional,

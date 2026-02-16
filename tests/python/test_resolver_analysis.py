@@ -5,6 +5,7 @@ import dataclasses
 import inspect
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import Annotated
 
 import pytest
 from noaio import can_syncify, syncify
@@ -181,7 +182,9 @@ def test_compiled_adapter_handles_all_call_modes():
         return "ok"
 
     @grommet.field
-    async def self_and_context(self, context: grommet.Context) -> str:
+    async def self_and_context(
+        self, context: Annotated[object, grommet.Context]
+    ) -> str:
         seen.append(("self_and_context", self, context, None))
         return "ok"
 
@@ -191,7 +194,9 @@ def test_compiled_adapter_handles_all_call_modes():
         return "ok"
 
     @grommet.field
-    async def self_context_and_args(self, context: grommet.Context, value: int) -> str:
+    async def self_context_and_args(
+        self, context: Annotated[object, grommet.Context], value: int
+    ) -> str:
         seen.append(("self_context_and_args", self, context, value))
         return "ok"
 
@@ -216,6 +221,52 @@ def test_compiled_adapter_handles_all_call_modes():
         ("self_and_args", "parent", None, 3),
         ("self_context_and_args", "parent", context_obj, 7),
     ]
+
+
+def test_compiled_adapter_context_order_is_irrelevant():
+    seen: list[tuple[object, int, object, str]] = []
+
+    @grommet.field
+    async def resolver(
+        self, value: int, context: Annotated[object, grommet.Context], label: str
+    ) -> str:
+        seen.append((self, value, context, label))
+        return "ok"
+
+    compiled = getattr(resolver, COMPILED_RESOLVER_ATTR)
+    context_obj = object()
+    compiled.func("parent", context_obj, {"value": 3, "label": "x"})
+    assert seen == [("parent", 3, context_obj, "x")]
+
+
+def test_compiled_adapter_injects_multiple_context_params():
+    marker = object()
+    expected_value = 7
+
+    @grommet.field
+    def resolver(
+        self,
+        first: Annotated[object, grommet.Context],
+        value: int,
+        second: Annotated[object, grommet.Context],
+    ) -> bool:
+        return (
+            self == "parent"
+            and value == expected_value
+            and first is marker
+            and second is marker
+        )
+
+    compiled = getattr(resolver, COMPILED_RESOLVER_ATTR)
+    assert compiled.func("parent", marker, {"value": expected_value}) is True
+
+
+def test_bare_context_annotation_is_rejected():
+    def resolver(self, context: grommet.Context) -> str:
+        return "hello"
+
+    with pytest.raises(TypeError, match=r"Annotated\[T, grommet\.Context\]"):
+        grommet.field(resolver)
 
 
 @grommet.type

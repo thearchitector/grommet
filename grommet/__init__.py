@@ -1,6 +1,5 @@
-from .context import Context
 from .decorators import field, input, subscription, type
-from .metadata import Field, Hidden
+from .metadata import Context, Field, Hidden
 from .schema import Schema
 
 __all__ = [

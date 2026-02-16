@@ -5,7 +5,6 @@ use async_graphql::dynamic::{
     Subscription, SubscriptionField, SubscriptionFieldFuture, TypeRef,
 };
 use pyo3::prelude::*;
-use pyo3::sync::PyOnceLock;
 use pyo3::types::PyAnyMethods;
 
 use crate::errors::{py_type_error, py_value_error};
@@ -38,27 +37,12 @@ fn unsupported_registration_type() -> PyErr {
     py_type_error(UNSUPPORTED_REGISTRATION_TYPE)
 }
 
-fn resolve_context_cls(py: Python<'_>) -> PyResult<PyObj> {
-    static CONTEXT_CLS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
-    let cls = CONTEXT_CLS.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
-        Ok(py.import("grommet.context")?.getattr("Context")?.unbind())
-    })?;
-    Ok(PyObj::new(cls.clone_ref(py)))
-}
-
 fn build_field_context(
-    py: Python<'_>,
     func: Py<PyAny>,
     needs_context: bool,
     is_async_gen: bool,
     output_type: &TypeRef,
 ) -> PyResult<Arc<FieldContext>> {
-    let context_cls = if needs_context {
-        Some(resolve_context_cls(py)?)
-    } else {
-        None
-    };
-
     Ok(Arc::new(FieldContext {
         resolver: Some(ResolverEntry {
             func: PyObj::new(func),
@@ -66,7 +50,6 @@ fn build_field_context(
             is_async_gen,
         }),
         output_type: output_type.clone(),
-        context_cls,
     }))
 }
 
@@ -128,7 +111,7 @@ fn build_object_field(py: Python<'_>, field: &Bound<'_, PyAny>) -> PyResult<Fiel
 
     let mut graphql_field = if is_data_field {
         let func: Py<PyAny> = field.getattr("resolver_func")?.extract()?;
-        let field_ctx = build_field_context(py, func, false, false, &type_ref)?;
+        let field_ctx = build_field_context(func, false, false, &type_ref)?;
         Field::new(name, type_ref, move |ctx| {
             let result = resolve_field_sync_fast(&ctx, &field_ctx);
             match result {
@@ -140,7 +123,7 @@ fn build_object_field(py: Python<'_>, field: &Bound<'_, PyAny>) -> PyResult<Fiel
         let func: Py<PyAny> = field.getattr("func")?.extract()?;
         let needs_context: bool = field.getattr("needs_context")?.extract()?;
         let is_async: bool = field.getattr("is_async")?.extract()?;
-        let field_ctx = build_field_context(py, func, needs_context, false, &type_ref)?;
+        let field_ctx = build_field_context(func, needs_context, false, &type_ref)?;
 
         let mut graphql_field = Field::new(name, type_ref, move |ctx| {
             if is_async {
@@ -183,7 +166,7 @@ fn build_subscription_field(
     let func: Py<PyAny> = field.getattr("func")?.extract()?;
     let needs_context: bool = field.getattr("needs_context")?.extract()?;
     let description: Option<String> = field.getattr("description")?.extract()?;
-    let field_ctx = build_field_context(py, func, needs_context, true, &type_ref)?;
+    let field_ctx = build_field_context(func, needs_context, true, &type_ref)?;
 
     let mut graphql_field = SubscriptionField::new(name, type_ref, move |ctx| {
         let field_ctx = field_ctx.clone();

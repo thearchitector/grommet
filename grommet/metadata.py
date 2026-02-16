@@ -6,14 +6,8 @@ MISSING = dataclasses.MISSING
 NO_DEFAULT: object = object()
 
 
-class _HiddenType:
-    """Marker to exclude a field from the GraphQL schema."""
-
-    def __repr__(self) -> str:
-        return "Hidden"
-
-
-Hidden = _HiddenType()
+Context = object()
+Hidden = object()
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

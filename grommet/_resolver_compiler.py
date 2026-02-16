@@ -1,5 +1,5 @@
 import inspect
-from typing import TYPE_CHECKING, get_origin
+from typing import TYPE_CHECKING
 
 from noaio import can_syncify, syncify
 
@@ -7,19 +7,22 @@ from ._annotations import get_annotations
 from ._compiled import CompiledArg, CompiledResolverField
 from .annotations import (
     _type_spec_from_annotation,
+    analyze_annotation,
     unwrap_async_iterable,
     walk_annotation,
 )
 from .coercion import _arg_coercer, _default_value_for_annotation
-from .context import Context
-from .errors import resolver_missing_annotation, resolver_requires_async
+from .errors import (
+    resolver_context_annotation_requires_annotated,
+    resolver_missing_annotation,
+    resolver_requires_async,
+)
+from .metadata import Context
 
 if TYPE_CHECKING:
     from builtins import type as pytype
     from collections.abc import Callable
     from typing import Any, Literal
-
-_MIN_CONTEXT_PARAMS = 2
 
 
 def _resolver_params(resolver: "Callable[..., Any]") -> list[inspect.Parameter]:
@@ -33,7 +36,11 @@ def _resolver_params(resolver: "Callable[..., Any]") -> list[inspect.Parameter]:
 
 
 def _is_context_annotation(annotation: "Any") -> bool:
-    return annotation is Context or get_origin(annotation) is Context
+    return analyze_annotation(annotation).is_context
+
+
+def _is_bare_context_annotation(annotation: "Any") -> bool:
+    return annotation is Context
 
 
 def _resolver_name(resolver: "Callable[..., Any]") -> str:
@@ -43,7 +50,7 @@ def _resolver_name(resolver: "Callable[..., Any]") -> str:
 def _resolver_adapter(
     func: "Callable[..., Any]",
     *,
-    has_context: bool,
+    context_param_names: tuple[str, ...],
     arg_names: tuple[str, ...],
     coercers: list[tuple[str, "Callable[[Any], Any]"]],
 ) -> "Callable[..., Any]":
@@ -52,6 +59,10 @@ def _resolver_adapter(
 
     def _adapter(parent: "Any", context: "Any", kwargs: dict[str, "Any"]) -> "Any":
         call_kwargs: dict[str, "Any"] = {}
+
+        for name in context_param_names:
+            call_kwargs[name] = context
+
         for name in arg_names:
             if name not in kwargs:
                 continue
@@ -60,13 +71,37 @@ def _resolver_adapter(
             if coercer is not None:
                 value = coercer(value)
             call_kwargs[name] = value
-        if has_context:
-            return func(parent, context, **call_kwargs)
+
         return func(parent, **call_kwargs)
 
     _adapter.__name__ = getattr(func, "__name__", "wrapped")
     _adapter.__qualname__ = getattr(func, "__qualname__", "wrapped")
     return _adapter
+
+
+def _partition_context_params(
+    resolver_name: str, params: list[inspect.Parameter], hints: dict[str, "Any"]
+) -> tuple[list[str], list[inspect.Parameter]]:
+    context_param_names: list[str] = []
+    graphql_arg_params: list[inspect.Parameter] = []
+
+    for param in params:
+        annotation = hints.get(param.name, param.annotation)
+        if annotation is inspect._empty:
+            raise resolver_missing_annotation(resolver_name, param.name)
+
+        if _is_bare_context_annotation(annotation):
+            raise resolver_context_annotation_requires_annotated(
+                resolver_name, param.name
+            )
+
+        if _is_context_annotation(annotation):
+            context_param_names.append(param.name)
+            continue
+
+        graphql_arg_params.append(param)
+
+    return context_param_names, graphql_arg_params
 
 
 def _build_arg_info(
@@ -110,15 +145,10 @@ def _build_arg_info(
 
 
 def _collect_refs(
-    return_ann: "Any",
-    arg_params: list[inspect.Parameter],
-    hints: dict[str, "Any"],
-    arg_start: int,
-    arg_count: int,
+    return_ann: "Any", arg_params: list[inspect.Parameter], hints: dict[str, "Any"]
 ) -> "frozenset[pytype]":
     refs: list[pytype] = list(walk_annotation(return_ann))
-    for i in range(arg_count):
-        param = arg_params[arg_start + i]
+    for param in arg_params:
         param_ann = hints.get(param.name, param.annotation)
         if param_ann is not inspect._empty:
             refs.extend(walk_annotation(param_ann))
@@ -140,18 +170,12 @@ def compile_resolver_field(
 
     hints = get_annotations(resolver)
     params = _resolver_params(resolver)
-    context_ann = (
-        hints.get(params[1].name, params[1].annotation)
-        if len(params) >= _MIN_CONTEXT_PARAMS
-        else inspect._empty
-    )
-    has_context = context_ann is not inspect._empty and _is_context_annotation(
-        context_ann
+    context_param_names, graphql_arg_params = _partition_context_params(
+        resolver_name, params[1:], hints
     )
 
-    arg_start = _MIN_CONTEXT_PARAMS if has_context else 1
     arg_names, coercers, args = _build_arg_info(
-        resolver_name, params[arg_start:], hints
+        resolver_name, graphql_arg_params, hints
     )
     is_coroutine = inspect.iscoroutinefunction(resolver)
     is_async = kind == "subscription" or is_coroutine
@@ -163,7 +187,10 @@ def compile_resolver_field(
 
     arg_names_tuple = tuple(arg_names)
     func = _resolver_adapter(
-        func, has_context=has_context, arg_names=arg_names_tuple, coercers=coercers
+        func,
+        context_param_names=tuple(context_param_names),
+        arg_names=arg_names_tuple,
+        coercers=coercers,
     )
 
     return_ann = hints.get("return", inspect._empty)
@@ -175,13 +202,13 @@ def compile_resolver_field(
     )
     type_spec = _type_spec_from_annotation(output_ann, expect_input=False)
 
-    refs = _collect_refs(return_ann, params, hints, arg_start, len(args))
+    refs = _collect_refs(return_ann, graphql_arg_params, hints)
 
     return CompiledResolverField(
         kind=kind,
         name=field_name,
         func=func,
-        needs_context=has_context,
+        needs_context=bool(context_param_names),
         is_async=is_async,
         type_spec=type_spec,
         description=description,

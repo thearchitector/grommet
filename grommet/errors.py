@@ -28,6 +28,15 @@ def resolver_missing_annotation(
     )
 
 
+def resolver_context_annotation_requires_annotated(
+    resolver_name: str, param_name: str
+) -> GrommetTypeError:
+    return GrommetTypeError(
+        f"Resolver {resolver_name} parameter '{param_name}' must use "
+        "Annotated[T, grommet.Context] for context injection."
+    )
+
+
 def resolver_requires_async(resolver_name: str, field_name: str) -> GrommetTypeError:
     return GrommetTypeError(
         f"Resolver {resolver_name} for field '{field_name}' must be async."

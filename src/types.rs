@@ -25,7 +25,7 @@ impl PyObj {
 }
 
 #[derive(Clone)]
-pub(crate) struct StateValue(pub(crate) PyObj);
+pub(crate) struct ContextValue(pub(crate) PyObj);
 
 #[derive(Clone)]
 pub(crate) struct ResolverEntry {
@@ -38,5 +38,4 @@ pub(crate) struct ResolverEntry {
 pub(crate) struct FieldContext {
     pub(crate) resolver: Option<ResolverEntry>,
     pub(crate) output_type: TypeRef,
-    pub(crate) context_cls: Option<PyObj>,
 }
