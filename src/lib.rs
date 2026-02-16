@@ -15,7 +15,7 @@ use crate::lookahead::Graph;
 use crate::values::OperationResult;
 
 // pyo3 module entrypoint for the python extension
-#[pymodule(gil_used = true)]
+#[pymodule(gil_used = false)]
 #[doc(hidden)]
 pub fn _core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<SchemaWrapper>()?;

@@ -17,6 +17,34 @@ where
     // surface on Python 3.14+ when parallel test threads race to first-import.
     INIT.call_once(|| {
         Python::attach(|py| {
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+import os
+import sys
+
+def candidate_paths(base: str) -> list[str]:
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    abi = getattr(sys, "abiflags", "")
+    candidates = [f"{version}{abi}", f"{version}t", version]
+    return [os.path.join(base, "lib", candidate, "site-packages") for candidate in candidates]
+
+search_roots = []
+venv = os.environ.get("VIRTUAL_ENV")
+if venv:
+    search_roots.append(venv)
+search_roots.append(os.path.join(os.getcwd(), ".venv"))
+
+for root in search_roots:
+    for path in candidate_paths(root):
+        if os.path.isdir(path) and path not in sys.path:
+            sys.path.insert(0, path)
+"#
+                ),
+                None,
+                None,
+            )
+            .unwrap();
             py.import("asyncio").unwrap();
             py.import("grommet.plan").unwrap();
         });

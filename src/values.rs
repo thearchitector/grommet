@@ -1,9 +1,8 @@
-use std::sync::OnceLock;
-
 use async_graphql::dynamic::{FieldValue, TypeRef};
 use async_graphql::{Name, Value};
 use pyo3::IntoPyObject;
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyAnyMethods, PyBytes, PyDict, PyList};
 
 use crate::errors::{expected_list_value, py_value_error, unsupported_value_type};
@@ -51,14 +50,11 @@ pub(crate) fn pyobj_to_value(value: &PyObj) -> PyResult<Value> {
 }
 
 fn dataclasses_asdict(py: Python<'_>) -> PyResult<Py<PyAny>> {
-    static DATACLASSES_ASDICT: OnceLock<Py<PyAny>> = OnceLock::new();
-    if let Some(asdict) = DATACLASSES_ASDICT.get() {
-        return Ok(asdict.clone_ref(py));
-    }
-
-    let asdict = py.import("dataclasses")?.getattr("asdict")?.unbind();
-    let _ = DATACLASSES_ASDICT.set(asdict.clone_ref(py));
-    Ok(asdict)
+    static DATACLASSES_ASDICT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+    let asdict = DATACLASSES_ASDICT.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+        Ok(py.import("dataclasses")?.getattr("asdict")?.unbind())
+    })?;
+    Ok(asdict.clone_ref(py))
 }
 
 fn input_object_as_dict<'py>(

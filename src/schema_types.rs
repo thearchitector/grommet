@@ -1,10 +1,11 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use async_graphql::dynamic::{
     Field, FieldFuture, FieldValue, InputObject, InputValue, Object, Schema, SchemaBuilder,
     Subscription, SubscriptionField, SubscriptionFieldFuture, TypeRef,
 };
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::PyAnyMethods;
 
 use crate::errors::{py_type_error, py_value_error};
@@ -38,14 +39,11 @@ fn unsupported_registration_type() -> PyErr {
 }
 
 fn resolve_context_cls(py: Python<'_>) -> PyResult<PyObj> {
-    static CONTEXT_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
-    if let Some(cls) = CONTEXT_CLS.get() {
-        return Ok(PyObj::new(cls.clone_ref(py)));
-    }
-
-    let cls = py.import("grommet.context")?.getattr("Context")?.unbind();
-    let _ = CONTEXT_CLS.set(cls.clone_ref(py));
-    Ok(PyObj::new(cls))
+    static CONTEXT_CLS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+    let cls = CONTEXT_CLS.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+        Ok(py.import("grommet.context")?.getattr("Context")?.unbind())
+    })?;
+    Ok(PyObj::new(cls.clone_ref(py)))
 }
 
 fn build_field_context(
