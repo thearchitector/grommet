@@ -283,6 +283,24 @@ Input.__grommet_meta__ = Meta(TypeKind.INPUT, "Input")
             });
         }
 
+        /// Ensures abstract outputs receive runtime type metadata via FieldValue::WithType.
+        #[test]
+        fn py_to_field_value_for_type_wraps_abstract_outputs() {
+            crate::with_py(|py| {
+                let locals = make_meta_objects(py);
+                let obj_cls = locals.get_item("Obj").unwrap().unwrap();
+                let obj = obj_cls.call0().unwrap();
+
+                let abstract_value =
+                    py_to_field_value_for_type(py, &obj, &TypeRef::named("Letter")).unwrap();
+                assert_eq!(format!("{:?}", abstract_value), "Obj");
+
+                let concrete_value =
+                    py_to_field_value_for_type(py, &obj, &TypeRef::named("Obj")).unwrap();
+                assert!(format!("{:?}", concrete_value).contains("PyObj"));
+            });
+        }
+
         /// Verifies GraphQL values and responses convert to Python structures.
         #[test]
         fn value_to_py_and_response_to_py_cover_variants() {

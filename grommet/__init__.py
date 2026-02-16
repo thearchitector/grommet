@@ -1,5 +1,5 @@
-from .decorators import field, input, subscription, type
-from .metadata import Context, Field, Hidden
+from .decorators import field, input, interface, subscription, type
+from .metadata import Context, Field, Hidden, Union
 from .schema import Schema
 
 __all__ = [
@@ -7,8 +7,10 @@ __all__ = [
     "Field",
     "Hidden",
     "Schema",
+    "Union",
     "field",
     "input",
+    "interface",
     "subscription",
     "type",
 ]

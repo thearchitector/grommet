@@ -1,6 +1,15 @@
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, ClassVar, get_args, get_origin
+from types import UnionType
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    ClassVar,
+    TypeAliasType,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from .errors import (
     async_iterable_requires_parameter,
@@ -8,9 +17,12 @@ from .errors import (
     list_type_requires_parameter,
     not_grommet_type,
     output_type_expected,
+    union_input_not_supported,
+    union_member_must_be_object,
     unsupported_annotation,
 )
 from .metadata import _SCALARS, Context, Hidden, TypeKind, TypeMeta, TypeSpec
+from .metadata import Union as UnionMetadata
 
 if TYPE_CHECKING:
     from builtins import type as pytype
@@ -34,22 +46,65 @@ class AnnotationInfo:
     is_context: bool
 
 
+def _unwrap_type_alias(annotation: "Any") -> "Any":
+    current = annotation
+    seen: set[int] = set()
+    while isinstance(current, TypeAliasType):
+        marker = id(current)
+        if marker in seen:
+            break
+        seen.add(marker)
+        current = current.__value__
+    return current
+
+
+def _is_union_origin(origin: "Any") -> bool:
+    return origin in (UnionType, Union)
+
+
+def _is_union_annotation(annotation: "Any") -> bool:
+    return _is_union_origin(get_origin(_unwrap_type_alias(annotation)))
+
+
+def _iter_union_members(annotation: "Any") -> "Iterator[Any]":
+    for raw_member in get_args(annotation):
+        member = _unwrap_type_alias(raw_member)
+        if member is _NONE_TYPE:
+            continue
+        yield member
+
+
+def _annotation_name(annotation: "Any") -> str:
+    name = getattr(annotation, "__name__", None)
+    if isinstance(name, str):
+        return name
+    return str(annotation)
+
+
+def _get_union_metadata(metadata: tuple["Any", ...]) -> UnionMetadata | None:
+    for item in metadata:
+        if isinstance(item, UnionMetadata):
+            return item
+    return None
+
+
 def analyze_annotation(annotation: "Any") -> AnnotationInfo:
     metadata: tuple["Any", ...] = ()
-    inner = annotation
+    inner = _unwrap_type_alias(annotation)
     origin = get_origin(inner)
     if origin is Annotated:
         args = get_args(inner)
         if args:
-            inner = args[0]
+            inner = _unwrap_type_alias(args[0])
             metadata = args[1:]
     inner, optional = _split_optional(inner)
+    inner = _unwrap_type_alias(inner)
     origin = get_origin(inner)
     args = get_args(inner)
     is_list = origin is list
-    list_item = args[0] if is_list and args else None
+    list_item = _unwrap_type_alias(args[0]) if is_list and args else None
     is_async_iterable = origin in (AsyncIterator, AsyncIterable)
-    async_item = args[0] if is_async_iterable and args else None
+    async_item = _unwrap_type_alias(args[0]) if is_async_iterable and args else None
     is_classvar = origin is ClassVar
     is_hidden = any(x is Hidden for x in metadata)
     is_context = any(x is Context for x in metadata)
@@ -77,11 +132,17 @@ def unwrap_async_iterable(annotation: "Any") -> tuple["Any", bool]:
 
 
 def _split_optional(annotation: "Any") -> tuple["Any", bool]:
+    annotation = _unwrap_type_alias(annotation)
     args = get_args(annotation)
     if args:
-        non_none = [arg for arg in args if arg is not _NONE_TYPE]
-        if len(non_none) == 1 and len(non_none) != len(args):
-            return non_none[0], True
+        non_none = [_unwrap_type_alias(arg) for arg in args if arg is not _NONE_TYPE]
+        if len(non_none) != len(args):
+            if len(non_none) == 1:
+                return non_none[0], True
+            union_value = non_none[0]
+            for item in non_none[1:]:
+                union_value = union_value | item
+            return union_value, True
     return annotation, False
 
 
@@ -114,8 +175,13 @@ def _walk_inner(inner: "Any") -> "Iterator[pytype]":
         yield from _walk_inner(info.list_item)
         return
 
-    if _is_grommet_type(inner):
-        yield inner
+    if _is_union_annotation(info.inner):
+        for member in _iter_union_members(info.inner):
+            yield from _walk_inner(member)
+        return
+
+    if _is_grommet_type(info.inner):
+        yield info.inner
 
 
 def _type_spec_from_annotation(
@@ -136,6 +202,15 @@ def _type_spec_from_annotation(
             ),
             nullable=nullable,
         )
+    union_spec = _build_union_type_spec(
+        annotation=annotation,
+        inner=inner,
+        metadata=info.metadata,
+        expect_input=expect_input,
+        nullable=nullable,
+    )
+    if union_spec is not None:
+        return union_spec
     if inner in _SCALARS:
         return TypeSpec(kind="named", name=_SCALARS[inner], nullable=nullable)
     if _is_grommet_type(inner):
@@ -161,3 +236,43 @@ def _is_grommet_type(obj: "Any") -> bool:
 
 def _is_input_type(obj: "Any") -> bool:
     return _is_grommet_type(obj) and _get_type_meta(obj).kind is TypeKind.INPUT
+
+
+def _build_union_type_spec(
+    *,
+    annotation: "Any",
+    inner: "Any",
+    metadata: tuple["Any", ...],
+    expect_input: bool,
+    nullable: bool,
+) -> TypeSpec | None:
+    if not _is_union_annotation(inner):
+        return None
+    if expect_input:
+        raise union_input_not_supported()
+
+    union_members: list[str] = []
+    for member in _iter_union_members(inner):
+        if not _is_grommet_type(member):
+            raise union_member_must_be_object(_annotation_name(member))
+        member_meta = _get_type_meta(member)
+        if member_meta.kind is not TypeKind.OBJECT:
+            raise union_member_must_be_object(member_meta.name)
+        union_members.append(member_meta.name)
+    if not union_members:
+        raise unsupported_annotation(annotation)
+
+    union_meta = _get_union_metadata(metadata)
+    union_name = (
+        union_meta.name
+        if union_meta is not None and union_meta.name is not None
+        else "".join(union_members)
+    )
+    union_description = union_meta.description if union_meta is not None else None
+    return TypeSpec(
+        kind="union",
+        name=union_name,
+        union_members=tuple(union_members),
+        union_description=union_description,
+        nullable=nullable,
+    )

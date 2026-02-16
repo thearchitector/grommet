@@ -57,7 +57,8 @@ def unsupported_annotation(annotation: "Any") -> GrommetTypeError:
 
 def not_grommet_type(type_name: str) -> GrommetTypeError:
     return GrommetTypeError(
-        f"{type_name} is not decorated with @grommet.type or @grommet.input"
+        f"{type_name} is not decorated with @grommet.type, "
+        "@grommet.interface, or @grommet.input"
     )
 
 
@@ -75,3 +76,19 @@ def decorator_requires_callable() -> GrommetTypeError:
 
 def input_mapping_expected(type_name: str) -> GrommetTypeError:
     return GrommetTypeError(f"Expected mapping for input type {type_name}")
+
+
+def union_input_not_supported() -> GrommetTypeError:
+    return GrommetTypeError("Union types are not supported in input annotations.")
+
+
+def union_member_must_be_object(member_name: str) -> GrommetTypeError:
+    return GrommetTypeError(
+        f"Union member '{member_name}' must be a type decorated with @grommet.type."
+    )
+
+
+def union_definition_conflict(union_name: str) -> GrommetTypeError:
+    return GrommetTypeError(
+        f"Union '{union_name}' has conflicting definitions across the schema graph."
+    )

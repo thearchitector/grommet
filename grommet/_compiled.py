@@ -62,4 +62,11 @@ class CompiledType:
     object_fields: tuple["CompiledDataField | CompiledResolverField", ...] = ()
     subscription_fields: tuple[CompiledResolverField, ...] = ()
     input_fields: tuple[CompiledInputField, ...] = ()
+    implements: tuple[str, ...] = ()
     refs: frozenset["pytype"] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledUnion:
+    meta: "TypeMeta"
+    possible_types: tuple[str, ...]

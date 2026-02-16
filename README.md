@@ -87,9 +87,12 @@ class User:
 
     name: str
 
+    def _message(self) -> str:
+        return f"Hello {self.name}" + ("!" * self._foo * self.bar * self.hidden)
+
     @grommet.field
     async def greeting(self) -> str:
-        return f"Hello {self.name}" + ("!" * self._foo * self.bar * self.hidden)
+        return self._message()
 
 
 @grommet.type
@@ -195,11 +198,113 @@ result = await schema.execute("{ greeting }", context={"request_id": "123"})
 print(result.data)  # {'greeting': 'Hello request 123!'}
 ```
 
+Define unions, optionally providing a name or description:
+
+```python
+@grommet.type
+@dataclass
+class A:
+    a: int
+
+
+@grommet.type
+@dataclass
+class B:
+    b: int
+
+
+type NamedAB = Annotated[A | B, grommet.Union(name="NamedAB", description="A or B")]
+
+
+@grommet.type
+@dataclass
+class Query:
+    @grommet.field
+    async def named(self, type: str) -> NamedAB:
+        return A(a=1) if type == "A" else B(b=2)
+
+    @grommet.field
+    async def unnamed(self, type: str) -> A | B:
+        return A(a=1) if type == "A" else B(b=2)
+
+
+schema = grommet.Schema(query=Query)
+print("union NamedAB" in schema.sdl)  # True
+## if a name is not explicitly set, grommet will concatenate all the member names
+print("union AB" in schema.sdl)  # True
+
+result = await schema.execute('{ named(type: "A") { ... on A { a } ... on B { b } } }')
+print(result.data)  # {'named': {'a': 1}}
+
+result = await schema.execute(
+    '{ unnamed(type: "B") { ... on A { a } ... on B { b } } }'
+)
+print(result.data)  # {'unnamed': {'b': 2}}
+```
+
+Simplify unions through common interfaces:
+
+```python
+@grommet.interface(description="A letter")
+@dataclass
+class Letter:
+    letter: str
+
+
+@grommet.type
+@dataclass
+class A(Letter):
+    pass
+
+
+@grommet.type
+@dataclass
+class B(Letter):
+    some_subfield: list[int]
+
+
+@grommet.type
+@dataclass
+class Query:
+    @grommet.field
+    async def common(self, type: str) -> Letter:
+        return A(letter="A") if type == "A" else B(letter="B", some_subfield=[42])
+
+
+schema = grommet.Schema(query=Query)
+print(schema.sdl)
+# """
+# A letter
+# """
+# interface Letter {
+#   letter: String!
+# }
+#
+# type A implements Letter {
+#   letter: String!
+# }
+#
+# type B implements Letter {
+#   letter: String!
+#   some_subfield: [Int!]!
+# }
+#
+# type Query {
+#   common(type: String!): Letter!
+# }
+```
+
 ## Development
 
 The public APIs for this project are defined by me (a human). Everything else is AI-written following `AGENTS.md` and plan guidelines. Implementation iterations take the form of plan documents in `ai_plans/`.
 
 This project is configured for uv + maturin.
+
+Install `prek` for quality control:
+```bash
+prek install
+prek run -a
+```
 
 Run unit tests with:
 
@@ -207,4 +312,11 @@ Run unit tests with:
 maturin develop --uv
 uv run pytest
 uv run cargo test  # you need to be in the venv!
+```
+
+Run benchmarks with:
+
+```bash
+maturin develop --uv -r
+uv run python benchmarks/bench_large.py
 ```

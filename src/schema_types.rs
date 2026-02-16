@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use async_graphql::dynamic::{
-    Field, FieldFuture, FieldValue, InputObject, InputValue, Object, Schema, SchemaBuilder,
-    Subscription, SubscriptionField, SubscriptionFieldFuture, TypeRef,
+    Field, FieldFuture, FieldValue, InputObject, InputValue, Interface, InterfaceField, Object,
+    Schema, SchemaBuilder, Subscription, SubscriptionField, SubscriptionFieldFuture, TypeRef,
+    Union,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyAnyMethods;
@@ -100,6 +101,27 @@ fn build_input_field_value(field: &Bound<'_, PyAny>) -> PyResult<InputValue> {
         default_value.as_ref(),
         description.as_deref(),
     )
+}
+
+fn build_interface_field(py: Python<'_>, field: &Bound<'_, PyAny>) -> PyResult<InterfaceField> {
+    let name: String = field.getattr("name")?.extract()?;
+    let type_spec = field.getattr("type_spec")?;
+    let type_ref = type_spec_to_type_ref(&type_spec)?;
+    let description: Option<String> = field.getattr("description")?.extract()?;
+
+    let mut interface_field = InterfaceField::new(name, type_ref);
+    if field.hasattr("args")? {
+        let args: Vec<Py<PyAny>> = field.getattr("args")?.extract()?;
+        for arg in &args {
+            let iv = build_argument_input_value(arg.bind(py))?;
+            interface_field = interface_field.argument(iv);
+        }
+    }
+    if let Some(description) = description.as_deref() {
+        interface_field = interface_field.description(description);
+    }
+
+    Ok(interface_field)
 }
 
 fn build_object_field(py: Python<'_>, field: &Bound<'_, PyAny>) -> PyResult<Field> {
@@ -204,7 +226,36 @@ fn build_object_type(
         object = object.field(build_object_field(py, field.bind(py))?);
     }
 
+    let implements: Vec<String> = compiled_type.getattr("implements")?.extract()?;
+    for interface_name in &implements {
+        object = object.implement(interface_name);
+    }
+
     Ok(object)
+}
+
+fn build_interface_type(
+    py: Python<'_>,
+    compiled_type: &Bound<'_, PyAny>,
+    type_name: &str,
+    description: Option<&str>,
+) -> PyResult<Interface> {
+    let mut interface = Interface::new(type_name);
+    if let Some(description) = description {
+        interface = interface.description(description);
+    }
+
+    let fields: Vec<Py<PyAny>> = compiled_type.getattr("object_fields")?.extract()?;
+    for field in &fields {
+        interface = interface.field(build_interface_field(py, field.bind(py))?);
+    }
+
+    let implements: Vec<String> = compiled_type.getattr("implements")?.extract()?;
+    for interface_name in &implements {
+        interface = interface.implement(interface_name);
+    }
+
+    Ok(interface)
 }
 
 fn build_input_object_type(
@@ -245,10 +296,30 @@ fn build_subscription_type(
     Ok(subscription)
 }
 
+fn build_union_type(
+    compiled_union: &Bound<'_, PyAny>,
+    type_name: &str,
+    description: Option<&str>,
+) -> PyResult<Union> {
+    let mut union_type = Union::new(type_name);
+    if let Some(description) = description {
+        union_type = union_type.description(description);
+    }
+
+    let possible_types: Vec<String> = compiled_union.getattr("possible_types")?.extract()?;
+    for possible_type in &possible_types {
+        union_type = union_type.possible_type(possible_type);
+    }
+
+    Ok(union_type)
+}
+
 pub(crate) enum RegistrableType {
     Object(Object),
+    Interface(Interface),
     InputObject(InputObject),
     Subscription(Subscription),
+    Union(Union),
 }
 
 fn decode_type_kind(meta: &Bound<'_, PyAny>) -> PyResult<String> {
@@ -280,6 +351,12 @@ fn decode_registrable_type(
             &type_name,
             description.as_deref(),
         )?)),
+        "interface" => Ok(RegistrableType::Interface(build_interface_type(
+            py,
+            compiled_type,
+            &type_name,
+            description.as_deref(),
+        )?)),
         "input" => Ok(RegistrableType::InputObject(build_input_object_type(
             py,
             compiled_type,
@@ -288,6 +365,11 @@ fn decode_registrable_type(
         )?)),
         "subscription" => Ok(RegistrableType::Subscription(build_subscription_type(
             py,
+            compiled_type,
+            &type_name,
+            description.as_deref(),
+        )?)),
+        "union" => Ok(RegistrableType::Union(build_union_type(
             compiled_type,
             &type_name,
             description.as_deref(),
@@ -309,8 +391,10 @@ pub(crate) fn register_schema(
         let registrable = decode_registrable_type(py, compiled_type.bind(py))?;
         builder = match registrable {
             RegistrableType::Object(object) => builder.register(object),
+            RegistrableType::Interface(interface) => builder.register(interface),
             RegistrableType::InputObject(input_object) => builder.register(input_object),
             RegistrableType::Subscription(subscription) => builder.register(subscription),
+            RegistrableType::Union(union_type) => builder.register(union_type),
         };
     }
 

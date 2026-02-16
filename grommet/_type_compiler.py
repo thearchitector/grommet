@@ -14,6 +14,8 @@ from ._compiled import (
     CompiledType,
 )
 from .annotations import (
+    _get_type_meta,
+    _is_grommet_type,
     _type_spec_from_annotation,
     analyze_annotation,
     is_hidden_field,
@@ -64,11 +66,34 @@ def _resolve_data_field_default(
 
 def _iter_compiled_resolvers(cls: "pytype") -> list[CompiledResolverField]:
     resolver_fields: list[CompiledResolverField] = []
-    for attr_value in vars(cls).values():
-        compiled = getattr(attr_value, COMPILED_RESOLVER_ATTR, None)
-        if isinstance(compiled, CompiledResolverField):
-            resolver_fields.append(compiled)
+    seen_attrs: set[str] = set()
+    for source_cls in cls.__mro__:
+        if source_cls is object:
+            continue
+        for attr_name, attr_value in vars(source_cls).items():
+            if attr_name in seen_attrs:
+                continue
+            seen_attrs.add(attr_name)
+            compiled = getattr(attr_value, COMPILED_RESOLVER_ATTR, None)
+            if isinstance(compiled, CompiledResolverField):
+                resolver_fields.append(compiled)
     return resolver_fields
+
+
+def _implemented_interfaces(
+    cls: "pytype",
+) -> tuple[tuple[str, ...], tuple["pytype", ...]]:
+    names: list[str] = []
+    refs: list[pytype] = []
+    for base in cls.__mro__[1:]:
+        if not _is_grommet_type(base):
+            continue
+        meta = _get_type_meta(base)
+        if meta.kind is not TypeKind.INTERFACE:
+            continue
+        names.append(meta.name)
+        refs.append(base)
+    return tuple(dict.fromkeys(names)), tuple(dict.fromkeys(refs))
 
 
 def _iter_visible_dataclass_fields(
@@ -170,13 +195,31 @@ def compile_type_definition(
             raise GrommetTypeError(
                 "A type cannot mix @field and @subscription decorators."
             )
+        if kind is TypeKind.INTERFACE and subscription_resolvers:
+            raise GrommetTypeError(
+                "Interface types cannot declare @subscription resolvers."
+            )
         if subscription_resolvers:
             resolved_kind = TypeKind.SUBSCRIPTION
 
     visible_fields = tuple(_iter_visible_dataclass_fields(cls, hints))
+    visible_field_names = {
+        dc_field.name for dc_field, _ann, _desc, _refs in visible_fields
+    }
+    field_resolvers = [
+        resolver
+        for resolver in field_resolvers
+        if resolver.name not in visible_field_names
+    ]
+
     refs: list[pytype] = []
     for _dc_field, _annotation, _desc, field_refs in visible_fields:
         refs.extend(field_refs)
+
+    implements: tuple[str, ...] = ()
+    if resolved_kind in {TypeKind.OBJECT, TypeKind.INTERFACE}:
+        implements, interface_refs = _implemented_interfaces(cls)
+        refs.extend(interface_refs)
 
     object_fields: tuple[CompiledDataField | CompiledResolverField, ...] = ()
     input_fields: tuple[CompiledInputField, ...] = ()
@@ -193,7 +236,7 @@ def compile_type_definition(
 
     resolver_ref_sources = (
         tuple(field_resolvers)
-        if resolved_kind is TypeKind.OBJECT
+        if resolved_kind in {TypeKind.OBJECT, TypeKind.INTERFACE}
         else subscription_fields
     )
     for resolver in resolver_ref_sources:
@@ -205,6 +248,7 @@ def compile_type_definition(
         object_fields=object_fields,
         subscription_fields=subscription_fields,
         input_fields=input_fields,
+        implements=implements,
         refs=frozenset(refs),
     )
 

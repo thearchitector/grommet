@@ -86,6 +86,36 @@ def input(
 
 
 @overload
+def interface(
+    cls: "pytype", *, name: str | None = None, description: str | None = None
+) -> "pytype": ...
+
+
+@overload
+def interface(
+    cls: None = None, *, name: str | None = None, description: str | None = None
+) -> "Callable[[pytype], pytype]": ...
+
+
+def interface(
+    cls: "pytype | None" = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> "Callable[[pytype], pytype] | pytype":
+    """Marks a dataclass as a GraphQL interface type."""
+
+    def wrap(target: "pytype") -> "pytype":
+        return _compile_decorated_type(
+            target, kind=TypeKind.INTERFACE, name=name, description=description
+        )
+
+    if cls is None:
+        return wrap
+    return wrap(cls)
+
+
+@overload
 def field(
     func: "Callable[P, R]", *, description: str | None = None, name: str | None = None
 ) -> "Callable[P, R]": ...

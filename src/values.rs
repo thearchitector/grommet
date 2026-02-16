@@ -66,17 +66,48 @@ fn input_object_as_dict<'py>(
         return Ok(None);
     }
     let meta = ty.getattr("__grommet_meta__")?;
-    if !meta.hasattr("kind")? {
+    let Some(kind_value) = meta_kind_value(&meta)? else {
         return Ok(None);
-    }
-    let kind = meta.getattr("kind")?;
-    let kind_value: String = kind.getattr("value")?.extract()?;
+    };
     if kind_value != "input" {
         return Ok(None);
     }
     let asdict = dataclasses_asdict(py)?;
     let dict_obj = asdict.bind(py).call1((value,))?;
     Ok(Some(dict_obj))
+}
+
+fn meta_kind_value(meta: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
+    if !meta.hasattr("kind")? {
+        return Ok(None);
+    }
+    let kind = meta.getattr("kind")?;
+    if kind.hasattr("value")? {
+        return Ok(Some(kind.getattr("value")?.extract()?));
+    }
+    Ok(Some(kind.extract()?))
+}
+
+fn grommet_object_type_name(value: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
+    let ty = value.get_type();
+    if !ty.hasattr("__grommet_meta__")? {
+        return Ok(None);
+    }
+    let meta = ty.getattr("__grommet_meta__")?;
+    let Some(kind_value) = meta_kind_value(&meta)? else {
+        return Ok(None);
+    };
+    if kind_value != "object" {
+        return Ok(None);
+    }
+    if !meta.hasattr("name")? {
+        return Ok(None);
+    }
+    Ok(Some(meta.getattr("name")?.extract()?))
+}
+
+fn is_builtin_scalar(type_name: &str) -> bool {
+    matches!(type_name, "Boolean" | "Int" | "Float" | "String" | "ID")
 }
 
 fn extract_scalar_value(value: &Bound<'_, PyAny>) -> Option<Value> {
@@ -122,6 +153,16 @@ fn convert_named_field_value(
 ) -> PyResult<FieldValue<'static>> {
     if value.is_none() {
         return Ok(FieldValue::value(Value::Null));
+    }
+
+    if !is_builtin_scalar(type_name)
+        && let Some(runtime_type_name) = grommet_object_type_name(value)?
+    {
+        let field_value = FieldValue::owned_any(PyObj::new(value.clone().unbind()));
+        if runtime_type_name == type_name {
+            return Ok(field_value);
+        }
+        return Ok(field_value.with_type(runtime_type_name));
     }
 
     match type_name {

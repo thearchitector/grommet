@@ -17,10 +17,20 @@ class Field:
     description: str | None = None
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class Union:
+    """Annotated metadata providing union-level GraphQL configuration."""
+
+    name: str | None = None
+    description: str | None = None
+
+
 class TypeKind(enum.Enum):
     OBJECT = "object"
     INPUT = "input"
+    INTERFACE = "interface"
     SUBSCRIPTION = "subscription"
+    UNION = "union"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -35,6 +45,8 @@ class TypeSpec:
     kind: str
     name: str | None = None
     of_type: "TypeSpec | None" = None
+    union_members: tuple[str, ...] = ()
+    union_description: str | None = None
     nullable: bool = False
 
 
