@@ -63,38 +63,6 @@ def _build_nested_async_case(rows: int) -> tuple[str, gm.Schema, str]:
     return "nested_async", gm.Schema(query=Query), "{ rows { a cells { value } } }"
 
 
-def _build_nested_async_context_case(rows: int) -> tuple[str, gm.Schema, str]:
-    @gm.type
-    @dataclass
-    class Cell:
-        j: Annotated[int, gm.Hidden]
-
-        @gm.field
-        async def value(self, context: gm.Context[None]) -> str:
-            await asyncio.sleep(0)
-            _ = context.graph.requests("value")
-            return f"Cell {self.j}"
-
-    @gm.type
-    @dataclass
-    class Row:
-        a: int
-        cells: list[Cell]
-
-    @gm.type
-    @dataclass
-    class Query:
-        @gm.field
-        def rows(self) -> list[Row]:
-            return [Row(a=i, cells=[Cell(j=j) for j in range(5)]) for i in range(rows)]
-
-    return (
-        "nested_async_context",
-        gm.Schema(query=Query),
-        "{ rows { a cells { value } } }",
-    )
-
-
 def _build_args_async_input_case(items: int) -> tuple[str, gm.Schema, str]:
     @gm.input
     @dataclass
@@ -153,7 +121,6 @@ async def _run_matrix(
     cases = [
         _build_nested_sync_case(rows_large),
         _build_nested_async_case(rows_large),
-        _build_nested_async_context_case(rows_large),
         _build_args_async_input_case(rows_args),
     ]
     out: dict[str, dict[str, float]] = {}
