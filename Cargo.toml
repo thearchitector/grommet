@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 async-graphql = { version = "7.2.1", default-features = false, features = ["dynamic-schema"] }
 indexmap = "2"
-pyo3 = { version = "0.28.0", features = ["experimental-async"] }
+pyo3 = { version = "0.28.0", features = ["experimental-async", "generate-import-lib"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
