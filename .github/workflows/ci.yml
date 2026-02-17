@@ -23,7 +23,7 @@ jobs:
       - name: Install the project
         run: |
           uv sync --locked --group dev --no-install-project
-          uv run maturin develop --uv -r
+          uv run maturin develop --uv
       - name: Run Python tests
         run: uv run pytest
       - name: Run Rust tests
