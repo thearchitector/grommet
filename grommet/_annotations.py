@@ -2,7 +2,7 @@
 import sys
 from typing import TYPE_CHECKING
 
-if sys.version_info >= (3, 14):
+if sys.version_info >= (3, 14):  # pragma: no cover
     from annotationlib import Format
     from annotationlib import get_annotations as _get_annotations
 else:  # pragma: no cover
